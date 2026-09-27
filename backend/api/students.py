@@ -6,7 +6,10 @@ from database.models import Student
 from schemas.student import StudentCreate
 
 
-router = APIRouter(prefix="/api/students", tags=["Students"])
+router = APIRouter(
+    prefix="/api/students",
+    tags=["Students"]
+)
 
 
 def get_db():
@@ -15,7 +18,10 @@ def get_db():
 
 
 @router.post("/")
-def create_student(student: StudentCreate, db: Session = Depends(get_db)):
+def create_student(
+    student: StudentCreate,
+    db: Session = Depends(get_db)
+):
     existing_student = (
         db.query(Student)
         .filter(Student.email == student.email)
@@ -34,6 +40,7 @@ def create_student(student: StudentCreate, db: Session = Depends(get_db)):
         college=student.college,
         branch=student.branch,
         cgpa=student.cgpa,
+        password_hash=""
     )
 
     db.add(new_student)
@@ -47,8 +54,15 @@ def create_student(student: StudentCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/{student_id}")
-def get_student(student_id: int, db: Session = Depends(get_db)):
-    student = db.query(Student).filter(Student.id == student_id).first()
+def get_student(
+    student_id: int,
+    db: Session = Depends(get_db)
+):
+    student = (
+        db.query(Student)
+        .filter(Student.id == student_id)
+        .first()
+    )
 
     if not student:
         raise HTTPException(
@@ -63,4 +77,60 @@ def get_student(student_id: int, db: Session = Depends(get_db)):
         "college": student.college,
         "branch": student.branch,
         "cgpa": student.cgpa,
+    }
+
+
+@router.put("/{student_id}")
+def update_student(
+    student_id: int,
+    student_data: StudentCreate,
+    db: Session = Depends(get_db)
+):
+    student = (
+        db.query(Student)
+        .filter(Student.id == student_id)
+        .first()
+    )
+
+    if not student:
+        raise HTTPException(
+            status_code=404,
+            detail="Student not found."
+        )
+
+    # Check if another student already uses this email
+    existing_student = (
+        db.query(Student)
+        .filter(
+            Student.email == student_data.email,
+            Student.id != student_id
+        )
+        .first()
+    )
+
+    if existing_student:
+        raise HTTPException(
+            status_code=400,
+            detail="Another student is already using this email."
+        )
+
+    student.name = student_data.name
+    student.email = student_data.email
+    student.college = student_data.college
+    student.branch = student_data.branch
+    student.cgpa = student_data.cgpa
+
+    db.commit()
+    db.refresh(student)
+
+    return {
+        "message": "Student profile updated successfully.",
+        "student": {
+            "id": student.id,
+            "name": student.name,
+            "email": student.email,
+            "college": student.college,
+            "branch": student.branch,
+            "cgpa": student.cgpa,
+        }
     }

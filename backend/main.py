@@ -3,6 +3,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.students import router as student_router
 from api.resume import router as resume_router
+from api.auth import router as auth_router
+from api.roadmap import router as roadmap_router
 app = FastAPI(title="PrepMate AI Backend")
 
 
@@ -17,6 +19,8 @@ app.add_middleware(
 
 app.include_router(student_router)
 app.include_router(resume_router)
+app.include_router(auth_router)
+app.include_router(roadmap_router)
 @app.get("/")
 def home():
     return {
