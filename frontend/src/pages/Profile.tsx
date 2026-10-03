@@ -1,5 +1,12 @@
-import { useEffect, useState } from 'react'
-import { Badge, Button, Card, PageHeader, Progress } from '../components/UI'
+import { useEffect, useMemo, useState } from 'react'
+import {
+  Badge,
+  Button,
+  Card,
+  PageHeader,
+  Progress
+} from '../components/UI'
+import { api } from '../services/api'
 
 type ProfileData = {
   name: string
@@ -24,77 +31,162 @@ type StudentFromBackend = {
   cgpa: string | null
 }
 
+type ResumeAnalysis = {
+  skills?: string[]
+  education?: string[]
+  detected_sections?: string[]
+  candidate_email?: string
+  candidate_phone?: string
+}
+
+type ResumeResponse = {
+  id?: number
+  filename?: string
+  candidate_email?: string
+  candidate_phone?: string
+  skills?: string[]
+  education?: string[]
+  detected_sections?: string[]
+  analysis?: ResumeAnalysis
+}
+
+function getStudentId(): number | null {
+  const storedStudent = localStorage.getItem('student')
+
+  if (!storedStudent) {
+    return null
+  }
+
+  try {
+    const student = JSON.parse(storedStudent)
+
+    const id = Number(
+      student?.student_id ?? student?.id
+    )
+
+    return Number.isFinite(id) && id > 0
+      ? id
+      : null
+  } catch {
+    return null
+  }
+}
+
+function parseStringArray(
+  value: unknown
+): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .filter(
+        item => typeof item === 'string'
+      )
+      .map(item => item.trim())
+      .filter(Boolean)
+  }
+
+  if (typeof value === 'string') {
+    return value
+      .split(',')
+      .map(item => item.trim())
+      .filter(Boolean)
+  }
+
+  return []
+}
+
+function getResumeAnalysis(
+  response: ResumeResponse
+): ResumeAnalysis {
+  if (response.analysis) {
+    return response.analysis
+  }
+
+  return {
+    skills: response.skills,
+    education: response.education,
+    detected_sections: response.detected_sections,
+    candidate_email: response.candidate_email,
+    candidate_phone: response.candidate_phone
+  }
+}
+
 export default function Profile() {
   const [edit, setEdit] = useState(false)
 
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
-  const [studentId, setStudentId] = useState<number | null>(null)
+  const [studentId, setStudentId] =
+    useState<number | null>(null)
 
-  const [p, setP] = useState<ProfileData | null>(null)
-  const [draft, setDraft] = useState<ProfileData | null>(null)
+  const [p, setP] =
+    useState<ProfileData | null>(null)
+
+  const [draft, setDraft] =
+    useState<ProfileData | null>(null)
 
   useEffect(() => {
     const loadProfile = async () => {
       try {
-        const storedStudent = localStorage.getItem('student')
-
-        if (!storedStudent) {
-          setError('Please login to view your profile.')
-          setLoading(false)
-          return
-        }
-
-        const loggedInStudent = JSON.parse(storedStudent)
-
-        const id =
-          loggedInStudent.student_id ||
-          loggedInStudent.id
+        const id = getStudentId()
 
         if (!id) {
-          setError('Student ID not found. Please login again.')
+          setError(
+            'Student ID not found. Please login again.'
+          )
           setLoading(false)
           return
         }
 
-        setStudentId(Number(id))
+        setStudentId(id)
 
-        const response = await fetch(
-          `http://127.0.0.1:8000/api/students/${id}`
-        )
+        const student =
+          await api.getStudent(id) as StudentFromBackend
 
-        const data = await response.json()
+        let resume: ResumeResponse | null = null
 
-        if (!response.ok) {
-          throw new Error(
-            data.detail || 'Failed to load profile.'
-          )
+        try {
+          resume =
+            await api.getLatestResume(id) as ResumeResponse
+        } catch {
+          resume = null
         }
 
-        const backendStudent: StudentFromBackend = data
+        const resumeAnalysis = resume
+          ? getResumeAnalysis(resume)
+          : {}
 
         const profileData: ProfileData = {
-          name: backendStudent.name || '',
-          email: backendStudent.email || '',
-          phone: '',
+          name: student.name || '',
+          email:
+            resumeAnalysis.candidate_email ||
+            student.email ||
+            '',
+          phone:
+            resumeAnalysis.candidate_phone ||
+            '',
           location: '',
-          college: backendStudent.college || '',
+          college: student.college || '',
           degree: 'B.Tech',
-          branch: backendStudent.branch || '',
-          cgpa: backendStudent.cgpa || '',
-          skills: [],
+          branch: student.branch || '',
+          cgpa: student.cgpa || '',
+          skills: parseStringArray(
+            resumeAnalysis.skills
+          ),
           softSkills: [],
           interests: []
         }
 
         setP(profileData)
         setDraft(profileData)
-
       } catch (err) {
-        console.error('Failed to load profile:', err)
+        console.error(
+          'Failed to load profile:',
+          err
+        )
 
         setError(
           err instanceof Error
@@ -109,79 +201,132 @@ export default function Profile() {
     loadProfile()
   }, [])
 
+  const profileCompletion = useMemo(() => {
+    if (!p) return 0
+
+    const fields = [
+      p.name,
+      p.email,
+      p.phone,
+      p.location,
+      p.college,
+      p.degree,
+      p.branch,
+      p.cgpa
+    ]
+
+    const completedFields =
+      fields.filter(
+        value => value.trim().length > 0
+      ).length
+
+    const skillBonus =
+      p.skills.length > 0 ? 1 : 0
+
+    const softSkillBonus =
+      p.softSkills.length > 0 ? 1 : 0
+
+    const interestBonus =
+      p.interests.length > 0 ? 1 : 0
+
+    const total =
+      fields.length + 3
+
+    return Math.round(
+      ((completedFields +
+        skillBonus +
+        softSkillBonus +
+        interestBonus) /
+        total) *
+        100
+    )
+  }, [p])
+
   const save = async () => {
-    if (!draft || !studentId) return
+    if (!draft || !studentId) {
+      return
+    }
 
     setSaving(true)
     setError('')
     setSuccess('')
 
     try {
-      const response = await fetch(
-        `http://127.0.0.1:8000/api/students/${studentId}`,
-        {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            name: draft.name,
-            email: draft.email,
-            college: draft.college,
-            branch: draft.branch,
-            cgpa: draft.cgpa
-          })
-        }
-      )
+      const response =
+        await api.updateStudent(
+          studentId,
+          {
+            name: draft.name.trim(),
+            email: draft.email.trim(),
+            college: draft.college.trim(),
+            branch: draft.branch.trim(),
+            cgpa: draft.cgpa.trim()
+          }
+        ) as StudentFromBackend
 
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(
-          data.detail || 'Failed to update profile.'
-        )
-      }
-
-      const updatedStudent = data.student
-
-      // Update profile state
       const updatedProfile: ProfileData = {
         ...draft,
-        name: updatedStudent.name,
-        email: updatedStudent.email,
-        college: updatedStudent.college || '',
-        branch: updatedStudent.branch || '',
-        cgpa: updatedStudent.cgpa || ''
+        name: response.name || '',
+        email: response.email || '',
+        college: response.college || '',
+        branch: response.branch || '',
+        cgpa: response.cgpa || ''
       }
 
       setP(updatedProfile)
       setDraft(updatedProfile)
 
-      // Keep login information synchronized
       const storedStudent =
         localStorage.getItem('student')
 
       if (storedStudent) {
-        const oldStudent = JSON.parse(storedStudent)
+        try {
+          const oldStudent =
+            JSON.parse(storedStudent)
 
-        localStorage.setItem(
-          'student',
-          JSON.stringify({
-            ...oldStudent,
-            name: updatedStudent.name,
-            email: updatedStudent.email,
-            college: updatedStudent.college,
-            branch: updatedStudent.branch,
-            cgpa: updatedStudent.cgpa
-          })
-        )
+          localStorage.setItem(
+            'student',
+            JSON.stringify({
+              ...oldStudent,
+              student_id:
+                oldStudent.student_id ??
+                oldStudent.id ??
+                studentId,
+              id:
+                oldStudent.id ??
+                studentId,
+              name: response.name,
+              email: response.email,
+              college: response.college,
+              branch: response.branch,
+              cgpa: response.cgpa
+            })
+          )
+        } catch {
+          localStorage.setItem(
+            'student',
+            JSON.stringify({
+              student_id: studentId,
+              id: studentId,
+              name: response.name,
+              email: response.email,
+              college: response.college,
+              branch: response.branch,
+              cgpa: response.cgpa
+            })
+          )
+        }
       }
 
       setEdit(false)
-      setSuccess('Profile updated successfully.')
-
+      setSuccess(
+        'Profile updated successfully.'
+      )
     } catch (err) {
-      console.error('Failed to update profile:', err)
+      console.error(
+        'Failed to update profile:',
+        err
+      )
 
       setError(
         err instanceof Error
@@ -196,7 +341,13 @@ export default function Profile() {
   const cancel = () => {
     if (!p) return
 
-    setDraft({ ...p })
+    setDraft({
+      ...p,
+      skills: [...p.skills],
+      softSkills: [...p.softSkills],
+      interests: [...p.interests]
+    })
+
     setEdit(false)
     setError('')
     setSuccess('')
@@ -238,7 +389,9 @@ export default function Profile() {
         />
 
         <Card>
-          <p className="notice">{error}</p>
+          <p className="notice">
+            {error}
+          </p>
         </Card>
       </>
     )
@@ -269,12 +422,14 @@ export default function Profile() {
 
       <Card>
         <div className="section-title">
-
           <div>
             <h2>{p.name}</h2>
 
             <p>
-              {p.degree} · {p.branch}
+              {p.degree}
+              {p.branch
+                ? ` · ${p.branch}`
+                : ''}
             </p>
           </div>
 
@@ -290,7 +445,6 @@ export default function Profile() {
             </Button>
           ) : (
             <div className="actions">
-
               <Button
                 variant="secondary"
                 onClick={cancel}
@@ -307,21 +461,21 @@ export default function Profile() {
                   ? 'Saving...'
                   : 'Save Changes'}
               </Button>
-
             </div>
           )}
-
         </div>
 
-        <Progress value={92} />
+        <Progress
+          value={profileCompletion}
+        />
 
         <small>
-          Profile completion: 92%
+          Profile completion:{' '}
+          {profileCompletion}%
         </small>
       </Card>
 
       <div className="two-col">
-
         <Card>
           <h2>Personal Information</h2>
 
@@ -331,8 +485,11 @@ export default function Profile() {
             <input
               disabled={!edit}
               value={draft.name}
-              onChange={(e) =>
-                updateDraft('name', e.target.value)
+              onChange={event =>
+                updateDraft(
+                  'name',
+                  event.target.value
+                )
               }
             />
           </label>
@@ -341,10 +498,14 @@ export default function Profile() {
             Email
 
             <input
+              type="email"
               disabled={!edit}
               value={draft.email}
-              onChange={(e) =>
-                updateDraft('email', e.target.value)
+              onChange={event =>
+                updateDraft(
+                  'email',
+                  event.target.value
+                )
               }
             />
           </label>
@@ -355,8 +516,11 @@ export default function Profile() {
             <input
               disabled={!edit}
               value={draft.phone}
-              onChange={(e) =>
-                updateDraft('phone', e.target.value)
+              onChange={event =>
+                updateDraft(
+                  'phone',
+                  event.target.value
+                )
               }
             />
           </label>
@@ -367,8 +531,11 @@ export default function Profile() {
             <input
               disabled={!edit}
               value={draft.location}
-              onChange={(e) =>
-                updateDraft('location', e.target.value)
+              onChange={event =>
+                updateDraft(
+                  'location',
+                  event.target.value
+                )
               }
             />
           </label>
@@ -383,8 +550,11 @@ export default function Profile() {
             <input
               disabled={!edit}
               value={draft.college}
-              onChange={(e) =>
-                updateDraft('college', e.target.value)
+              onChange={event =>
+                updateDraft(
+                  'college',
+                  event.target.value
+                )
               }
             />
           </label>
@@ -395,8 +565,11 @@ export default function Profile() {
             <input
               disabled={!edit}
               value={draft.degree}
-              onChange={(e) =>
-                updateDraft('degree', e.target.value)
+              onChange={event =>
+                updateDraft(
+                  'degree',
+                  event.target.value
+                )
               }
             />
           </label>
@@ -407,8 +580,11 @@ export default function Profile() {
             <input
               disabled={!edit}
               value={draft.branch}
-              onChange={(e) =>
-                updateDraft('branch', e.target.value)
+              onChange={event =>
+                updateDraft(
+                  'branch',
+                  event.target.value
+                )
               }
             />
           </label>
@@ -419,13 +595,15 @@ export default function Profile() {
             <input
               disabled={!edit}
               value={draft.cgpa}
-              onChange={(e) =>
-                updateDraft('cgpa', e.target.value)
+              onChange={event =>
+                updateDraft(
+                  'cgpa',
+                  event.target.value
+                )
               }
             />
           </label>
         </Card>
-
       </div>
 
       <Card>
@@ -433,13 +611,16 @@ export default function Profile() {
 
         <div className="badges">
           {p.skills.length > 0 ? (
-            p.skills.map((skill) => (
+            p.skills.map(skill => (
               <Badge key={skill}>
                 {skill}
               </Badge>
             ))
           ) : (
-            <p>No technical skills added yet.</p>
+            <p>
+              Upload a resume to let AI extract
+              your technical skills.
+            </p>
           )}
         </div>
 
@@ -447,13 +628,16 @@ export default function Profile() {
 
         <div className="badges">
           {p.softSkills.length > 0 ? (
-            p.softSkills.map((skill) => (
+            p.softSkills.map(skill => (
               <Badge key={skill}>
                 {skill}
               </Badge>
             ))
           ) : (
-            <p>No soft skills added yet.</p>
+            <p>
+              Soft skills will be populated from
+              your AI resume analysis.
+            </p>
           )}
         </div>
 
@@ -461,13 +645,16 @@ export default function Profile() {
 
         <div className="badges">
           {p.interests.length > 0 ? (
-            p.interests.map((interest) => (
+            p.interests.map(interest => (
               <Badge key={interest}>
                 {interest}
               </Badge>
             ))
           ) : (
-            <p>No interests added yet.</p>
+            <p>
+              Interests can be added as profile
+              information becomes available.
+            </p>
           )}
         </div>
       </Card>

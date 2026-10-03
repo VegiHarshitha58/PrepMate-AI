@@ -3,13 +3,18 @@ import hmac
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from database.connection import engine
 from database.models import Student
 from schemas.auth import RegisterRequest, LoginRequest
 
-router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+router = APIRouter(
+    prefix="/auth",
+    tags=["Authentication"]
+)
 
 
 def get_db():
@@ -27,29 +32,32 @@ def hash_password(password: str) -> str:
         100_000
     )
 
-    return (
-        salt.hex()
-        + ":"
-        + password_hash.hex()
-    )
+    return f"{salt.hex()}:{password_hash.hex()}"
 
 
-def verify_password(password: str, stored_hash: str) -> bool:
-    salt_hex, hash_hex = stored_hash.split(":")
+def verify_password(
+    password: str,
+    stored_hash: str
+) -> bool:
+    try:
+        salt_hex, hash_hex = stored_hash.split(":", 1)
 
-    salt = bytes.fromhex(salt_hex)
+        salt = bytes.fromhex(salt_hex)
 
-    new_hash = hashlib.pbkdf2_hmac(
-        "sha256",
-        password.encode("utf-8"),
-        salt,
-        100_000
-    )
+        new_hash = hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode("utf-8"),
+            salt,
+            100_000
+        )
 
-    return hmac.compare_digest(
-        new_hash.hex(),
-        hash_hex
-    )
+        return hmac.compare_digest(
+            new_hash.hex(),
+            hash_hex
+        )
+
+    except (ValueError, TypeError):
+        return False
 
 
 @router.post("/register")
@@ -57,9 +65,30 @@ def register(
     data: RegisterRequest,
     db: Session = Depends(get_db)
 ):
+    name = data.name.strip()
+    email = data.email.strip().lower()
+
+    if not name:
+        raise HTTPException(
+            status_code=400,
+            detail="Name is required."
+        )
+
+    if not email:
+        raise HTTPException(
+            status_code=400,
+            detail="Email is required."
+        )
+
+    if not data.password:
+        raise HTTPException(
+            status_code=400,
+            detail="Password is required."
+        )
+
     existing_student = (
         db.query(Student)
-        .filter(Student.email == data.email)
+        .filter(Student.email == email)
         .first()
     )
 
@@ -70,21 +99,35 @@ def register(
         )
 
     new_student = Student(
-        name=data.name,
-        email=data.email,
-        college=data.college,
+        name=name,
+        email=email,
+        college=(
+            data.college.strip()
+            if data.college
+            else None
+        ),
         password_hash=hash_password(data.password)
     )
 
-    db.add(new_student)
-    db.commit()
-    db.refresh(new_student)
+    try:
+        db.add(new_student)
+        db.commit()
+        db.refresh(new_student)
+
+    except IntegrityError:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=400,
+            detail="An account with this email already exists."
+        )
 
     return {
         "message": "Account created successfully.",
         "student_id": new_student.id,
         "name": new_student.name,
-        "email": new_student.email
+        "email": new_student.email,
+        "college": new_student.college
     }
 
 
@@ -93,9 +136,11 @@ def login(
     data: LoginRequest,
     db: Session = Depends(get_db)
 ):
+    email = data.email.strip().lower()
+
     student = (
         db.query(Student)
-        .filter(Student.email == data.email)
+        .filter(Student.email == email)
         .first()
     )
 
@@ -108,7 +153,7 @@ def login(
     if not student.password_hash:
         raise HTTPException(
             status_code=401,
-            detail="This account needs to be registered again."
+            detail="Invalid email or password."
         )
 
     if not verify_password(

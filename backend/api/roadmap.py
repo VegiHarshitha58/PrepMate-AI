@@ -23,6 +23,24 @@ def update_roadmap_progress(
     week: int,
     done: bool
 ):
+    if student_id <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Valid student ID is required."
+        )
+
+    if analysis_id <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Valid analysis ID is required."
+        )
+
+    if week <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Week must be greater than 0."
+        )
+
     db = next(get_db())
 
     try:
@@ -38,7 +56,6 @@ def update_roadmap_progress(
 
         if progress:
             progress.done = done
-
         else:
             progress = RoadmapProgress(
                 student_id=student_id,
@@ -46,7 +63,6 @@ def update_roadmap_progress(
                 week=week,
                 done=done
             )
-
             db.add(progress)
 
         db.commit()
@@ -60,12 +76,12 @@ def update_roadmap_progress(
             "done": progress.done
         }
 
-    except Exception as e:
+    except Exception as exc:
         db.rollback()
 
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to update roadmap progress: {str(e)}"
+            detail=f"Failed to update roadmap progress: {str(exc)}"
         )
 
     finally:
@@ -77,6 +93,18 @@ def get_roadmap_progress(
     student_id: int,
     analysis_id: int
 ):
+    if student_id <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Valid student ID is required."
+        )
+
+    if analysis_id <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Valid analysis ID is required."
+        )
+
     db = next(get_db())
 
     try:
@@ -85,6 +113,9 @@ def get_roadmap_progress(
             .filter(
                 RoadmapProgress.student_id == student_id,
                 RoadmapProgress.analysis_id == analysis_id
+            )
+            .order_by(
+                RoadmapProgress.week.asc()
             )
             .all()
         )

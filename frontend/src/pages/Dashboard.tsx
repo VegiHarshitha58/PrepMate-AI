@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react'
 import { Card, Progress, PageHeader, Badge } from '../components/UI'
+import { api } from '../services/api'
 
 type Student = {
-  id: number
   student_id?: number
+  id?: number
   name: string
   email: string
-  college: string | null
-  branch: string | null
-  cgpa: string | null
+  college?: string | null
+  branch?: string | null
+  cgpa?: string | null
 }
 
 type ResumeAnalysis = {
@@ -17,119 +18,124 @@ type ResumeAnalysis = {
   skills: string[]
 }
 
+type CareerDomain = {
+  domain: string
+  match_percentage: number
+  matching_skills: string[]
+}
+
 type CareerAnalysis = {
-  recommended_domains: {
-    domain: string
-    match_percentage: number
-    matching_skills: string[]
-  }[]
+  recommended_domains: CareerDomain[]
+  skills_used: string[]
+}
+
+type JobMatch = {
+  role: string
+  domain: string
+  level: string
+  match_percentage: number
+  matching_skills: string[]
+  missing_skills: string[]
 }
 
 type JobAnalysis = {
-  job_matches: {
-    role: string
-    domain: string
-    level: string
-    match_percentage: number
-    matching_skills: string[]
-    missing_skills: string[]
-  }[]
+  job_matches: JobMatch[]
+  skills_used: string[]
+}
+
+type SkillGap = {
+  skill: string
+  status: string
+  priority: string
+  reason: string
 }
 
 type SkillGapAnalysis = {
   target_role: string
   target_domain: string
-  skill_gaps: {
-    skill: string
-    status: string
-    priority: string
-    reason: string
-  }[]
+  skill_gaps: SkillGap[]
   missing_skills_count: number
   total_required_skills: number
 }
 
-export default function Dashboard() {
-  const [student, setStudent] = useState<Student | null>(null)
-  const [resume, setResume] = useState<ResumeAnalysis | null>(null)
-  const [career, setCareer] = useState<CareerAnalysis | null>(null)
-  const [jobs, setJobs] = useState<JobAnalysis | null>(null)
-  const [skillGap, setSkillGap] =
-    useState<SkillGapAnalysis | null>(null)
+type DashboardData = {
+  resume_score: number
+  word_count: number
+  skills: string[]
+  career_analysis: CareerAnalysis
+  job_analysis: JobAnalysis
+  skill_gap_analysis: SkillGapAnalysis
+}
 
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+function getStudentFromStorage(): Student | null {
+  const storedStudent = localStorage.getItem('student')
+
+  if (!storedStudent) {
+    return null
+  }
+
+  try {
+    return JSON.parse(storedStudent)
+  } catch {
+    return null
+  }
+}
+
+export default function Dashboard() {
+  const [student, setStudent] =
+    useState<Student | null>(null)
+
+  const [data, setData] =
+    useState<DashboardData | null>(null)
+
+  const [loading, setLoading] =
+    useState(true)
+
+  const [error, setError] =
+    useState('')
 
   useEffect(() => {
-    const loadDashboardData = async () => {
-      try {
-        // -----------------------------
-        // Get logged-in student
-        // -----------------------------
-        const storedStudent =
-          localStorage.getItem('student')
+    const loadDashboard = async () => {
+      const loggedInStudent =
+        getStudentFromStorage()
 
-        if (!storedStudent) {
-          setError('Please login to view your dashboard.')
-          setLoading(false)
-          return
-        }
-
-        const loggedInStudent = JSON.parse(storedStudent)
-
-        setStudent(loggedInStudent)
-
-        const studentId =
-          loggedInStudent.student_id ||
-          loggedInStudent.id
-
-        if (!studentId) {
-          setError('Student ID not found. Please login again.')
-          setLoading(false)
-          return
-        }
-
-        // -----------------------------
-        // Fetch latest resume analysis
-        // from PostgreSQL
-        // -----------------------------
-        const response = await fetch(
-          `http://127.0.0.1:8000/api/resume/latest/${studentId}`
+      if (!loggedInStudent) {
+        setError(
+          'Please login to view your dashboard.'
         )
+        setLoading(false)
+        return
+      }
 
-        if (response.status === 404) {
-          // Student has not uploaded a resume yet
-          setLoading(false)
-          return
+      setStudent(loggedInStudent)
+
+      const studentId =
+        loggedInStudent.student_id ??
+        loggedInStudent.id
+
+      if (!studentId) {
+        setError(
+          'Student information is incomplete. Please login again.'
+        )
+        setLoading(false)
+        return
+      }
+
+      try {
+        try {
+          const result = await api.getLatestResume(Number(studentId))
+          setData(result as DashboardData)
+        } catch (err) {
+          if (err instanceof Error && err.message.toLowerCase().includes('no resume analysis')) {
+            setData(null)
+            setLoading(false)
+            return
+          }
+          throw err
         }
-
-        const data = await response.json()
-
-        if (!response.ok) {
-          throw new Error(
-            data.detail ||
-              'Failed to load resume analysis.'
-          )
-        }
-
-        // -----------------------------
-        // Set real database data
-        // -----------------------------
-        setResume({
-          resume_score: data.resume_score,
-          word_count: data.word_count,
-          skills: data.skills
-        })
-
-        setCareer(data.career_analysis)
-
-        setJobs(data.job_analysis)
-
-        setSkillGap(data.skill_gap_analysis)
-
       } catch (err) {
         console.error(
-          'Failed to load dashboard data:',
+          'Failed to load dashboard:',
           err
         )
 
@@ -143,22 +149,9 @@ export default function Dashboard() {
       }
     }
 
-    loadDashboardData()
+    loadDashboard()
   }, [])
 
-  const topDomain =
-    career?.recommended_domains?.length
-      ? career.recommended_domains[0]
-      : null
-
-  const topJob =
-    jobs?.job_matches?.length
-      ? jobs.job_matches[0]
-      : null
-
-  // -----------------------------
-  // Loading state
-  // -----------------------------
   if (loading) {
     return (
       <>
@@ -174,9 +167,6 @@ export default function Dashboard() {
     )
   }
 
-  // -----------------------------
-  // Error state
-  // -----------------------------
   if (error) {
     return (
       <>
@@ -194,6 +184,27 @@ export default function Dashboard() {
     )
   }
 
+  const resume = data
+    ? {
+        resume_score: data.resume_score,
+        word_count: data.word_count,
+        skills: data.skills
+      }
+    : null
+
+  const career = data?.career_analysis
+
+  const jobs = data?.job_analysis
+
+  const skillGap =
+    data?.skill_gap_analysis
+
+  const topDomain =
+    career?.recommended_domains?.[0] ?? null
+
+  const topJob =
+    jobs?.job_matches?.[0] ?? null
+
   return (
     <>
       <PageHeader
@@ -203,7 +214,6 @@ export default function Dashboard() {
         subtitle="Your placement preparation snapshot."
       />
 
-      {/* Dynamic Metrics */}
       <div className="metrics">
 
         <Card>
@@ -217,14 +227,16 @@ export default function Dashboard() {
               : '--'}
           </div>
 
-          <Progress
-            value={resume?.resume_score || 0}
-          />
+          {resume && (
+            <Progress
+              value={resume.resume_score}
+            />
+          )}
 
           <p>
             {resume
               ? `${resume.skills.length} skills detected`
-              : 'Upload your resume'}
+              : 'Upload your resume to begin'}
           </p>
         </Card>
 
@@ -239,11 +251,13 @@ export default function Dashboard() {
               : '--'}
           </div>
 
-          <Progress
-            value={
-              topDomain?.match_percentage || 0
-            }
-          />
+          {topDomain && (
+            <Progress
+              value={
+                topDomain.match_percentage
+              }
+            />
+          )}
 
           <p>
             {topDomain
@@ -272,38 +286,28 @@ export default function Dashboard() {
 
         <Card>
           <div className="metric-label">
-            Top Job Match
+            Job Matches
           </div>
 
           <div className="metric">
-            {topJob
-              ? `${topJob.match_percentage}%`
-              : '--'}
+            {jobs?.job_matches?.length ?? '--'}
           </div>
 
-          <Progress
-            value={
-              topJob?.match_percentage || 0
-            }
-          />
-
           <p>
-            {topJob
-              ? topJob.role
-              : 'No job matches yet'}
+            {jobs
+              ? 'Roles identified from your analysis'
+              : 'Analyze your resume'}
           </p>
         </Card>
 
       </div>
 
-      {/* Student Information + Career */}
       <div className="two-col">
 
         <Card>
           <h2>Student Information</h2>
 
           <div style={{ marginTop: 20 }}>
-
             <p>
               <strong>Name:</strong>{' '}
               {student?.name || 'Not available'}
@@ -316,29 +320,32 @@ export default function Dashboard() {
 
             <p>
               <strong>College:</strong>{' '}
-              {student?.college || 'Not added'}
+              {student?.college ||
+                'Not added'}
             </p>
 
             <p>
               <strong>Branch:</strong>{' '}
-              {student?.branch || 'Not added'}
+              {student?.branch ||
+                'Not added'}
             </p>
 
             <p>
               <strong>CGPA:</strong>{' '}
-              {student?.cgpa || 'Not added'}
+              {student?.cgpa ||
+                'Not added'}
             </p>
-
           </div>
         </Card>
 
         <Card>
-          <h2>Recommended Career Domain</h2>
+          <h2>Career Direction</h2>
 
           {topDomain ? (
             <div style={{ marginTop: 20 }}>
-
-              <h3>{topDomain.domain}</h3>
+              <h3>
+                {topDomain.domain}
+              </h3>
 
               <Progress
                 value={
@@ -347,7 +354,8 @@ export default function Dashboard() {
               />
 
               <p>
-                {topDomain.match_percentage}% match
+                {topDomain.match_percentage}%
+                profile alignment
               </p>
 
               <div className="badges">
@@ -359,32 +367,31 @@ export default function Dashboard() {
                   )
                 )}
               </div>
-
             </div>
           ) : (
             <p style={{ marginTop: 20 }}>
-              Upload and analyze your resume to get
-              career recommendations.
+              Upload and analyze your resume
+              to generate career directions.
             </p>
           )}
-
         </Card>
 
       </div>
 
-      {/* Job Match + Skill Gap */}
       <div className="two-col">
 
         <Card>
-          <h2>Top Job Match</h2>
+          <h2>Current Job Matches</h2>
 
           {topJob ? (
             <div style={{ marginTop: 20 }}>
-
-              <h3>{topJob.role}</h3>
+              <h3>
+                {topJob.role}
+              </h3>
 
               <p>
-                {topJob.domain} · {topJob.level}
+                {topJob.domain} ·{' '}
+                {topJob.level}
               </p>
 
               <Progress
@@ -394,10 +401,13 @@ export default function Dashboard() {
               />
 
               <p>
-                {topJob.match_percentage}% match
+                {topJob.match_percentage}%
+                profile match
               </p>
 
-              <h4>Matching Skills</h4>
+              <h4>
+                Matching Skills
+              </h4>
 
               <div className="badges">
                 {topJob.matching_skills.map(
@@ -409,9 +419,12 @@ export default function Dashboard() {
                 )}
               </div>
 
-              {topJob.missing_skills.length > 0 && (
+              {topJob.missing_skills.length >
+                0 && (
                 <>
-                  <h4>Missing Skills</h4>
+                  <h4>
+                    Skills to Develop
+                  </h4>
 
                   <div className="badges">
                     {topJob.missing_skills.map(
@@ -424,14 +437,13 @@ export default function Dashboard() {
                   </div>
                 </>
               )}
-
             </div>
           ) : (
             <p style={{ marginTop: 20 }}>
-              No job matches available yet.
+              No job matches are available
+              yet.
             </p>
           )}
-
         </Card>
 
         <Card>
@@ -439,19 +451,24 @@ export default function Dashboard() {
 
           {skillGap ? (
             <div style={{ marginTop: 20 }}>
-
               <p>
-                <strong>Target Role:</strong>{' '}
+                <strong>
+                  Target Role:
+                </strong>{' '}
                 {skillGap.target_role}
               </p>
 
               <p>
-                <strong>Target Domain:</strong>{' '}
+                <strong>
+                  Target Domain:
+                </strong>{' '}
                 {skillGap.target_domain}
               </p>
 
               <p>
-                <strong>Missing Skills:</strong>{' '}
+                <strong>
+                  Missing Skills:
+                </strong>{' '}
                 {skillGap.missing_skills_count}
               </p>
 
@@ -459,7 +476,8 @@ export default function Dashboard() {
                 {skillGap.skill_gaps
                   .filter(
                     (gap) =>
-                      gap.status === 'Missing'
+                      gap.status ===
+                      'Missing'
                   )
                   .map((gap) => (
                     <Badge key={gap.skill}>
@@ -467,45 +485,46 @@ export default function Dashboard() {
                     </Badge>
                   ))}
               </div>
-
             </div>
           ) : (
             <p style={{ marginTop: 20 }}>
               Analyze your resume to identify
-              skill gaps.
+              personalized skill gaps.
             </p>
           )}
-
         </Card>
 
       </div>
 
-      {/* Resume Status */}
       <Card>
         <h2>Resume Status</h2>
 
         {resume ? (
           <div style={{ marginTop: 20 }}>
-
             <p>
-              <strong>Resume Score:</strong>{' '}
+              <strong>
+                Resume Score:
+              </strong>{' '}
               {resume.resume_score}/100
             </p>
 
             <p>
-              <strong>Word Count:</strong>{' '}
+              <strong>
+                Word Count:
+              </strong>{' '}
               {resume.word_count}
             </p>
 
             <p>
-              <strong>Skills Detected:</strong>{' '}
+              <strong>
+                Skills Detected:
+              </strong>{' '}
               {resume.skills.length}
             </p>
 
             <Progress
               value={resume.resume_score}
             />
-
           </div>
         ) : (
           <p style={{ marginTop: 20 }}>

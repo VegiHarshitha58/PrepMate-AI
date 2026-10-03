@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from database.connection import engine
@@ -22,9 +23,24 @@ def create_student(
     student: StudentCreate,
     db: Session = Depends(get_db)
 ):
+    name = student.name.strip()
+    email = student.email.strip().lower()
+
+    if not name:
+        raise HTTPException(
+            status_code=400,
+            detail="Name is required."
+        )
+
+    if not email:
+        raise HTTPException(
+            status_code=400,
+            detail="Email is required."
+        )
+
     existing_student = (
         db.query(Student)
-        .filter(Student.email == student.email)
+        .filter(Student.email == email)
         .first()
     )
 
@@ -35,21 +51,42 @@ def create_student(
         )
 
     new_student = Student(
-        name=student.name,
-        email=student.email,
-        college=student.college,
-        branch=student.branch,
-        cgpa=student.cgpa,
+        name=name,
+        email=email,
+        college=(
+            student.college.strip()
+            if student.college
+            else None
+        ),
+        branch=(
+            student.branch.strip()
+            if student.branch
+            else None
+        ),
+        cgpa=(
+            student.cgpa.strip()
+            if student.cgpa
+            else None
+        ),
         password_hash=""
     )
 
-    db.add(new_student)
-    db.commit()
-    db.refresh(new_student)
+    try:
+        db.add(new_student)
+        db.commit()
+        db.refresh(new_student)
+
+    except IntegrityError:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=400,
+            detail="Student with this email already exists."
+        )
 
     return {
-        "message": "Student created successfully",
-        "student_id": new_student.id,
+        "message": "Student created successfully.",
+        "student_id": new_student.id
     }
 
 
@@ -58,6 +95,12 @@ def get_student(
     student_id: int,
     db: Session = Depends(get_db)
 ):
+    if student_id <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Valid student ID is required."
+        )
+
     student = (
         db.query(Student)
         .filter(Student.id == student_id)
@@ -76,7 +119,7 @@ def get_student(
         "email": student.email,
         "college": student.college,
         "branch": student.branch,
-        "cgpa": student.cgpa,
+        "cgpa": student.cgpa
     }
 
 
@@ -86,6 +129,12 @@ def update_student(
     student_data: StudentCreate,
     db: Session = Depends(get_db)
 ):
+    if student_id <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Valid student ID is required."
+        )
+
     student = (
         db.query(Student)
         .filter(Student.id == student_id)
@@ -98,11 +147,12 @@ def update_student(
             detail="Student not found."
         )
 
-    # Check if another student already uses this email
+    email = student_data.email.strip().lower()
+
     existing_student = (
         db.query(Student)
         .filter(
-            Student.email == student_data.email,
+            Student.email == email,
             Student.id != student_id
         )
         .first()
@@ -114,14 +164,35 @@ def update_student(
             detail="Another student is already using this email."
         )
 
-    student.name = student_data.name
-    student.email = student_data.email
-    student.college = student_data.college
-    student.branch = student_data.branch
-    student.cgpa = student_data.cgpa
+    student.name = student_data.name.strip()
+    student.email = email
+    student.college = (
+        student_data.college.strip()
+        if student_data.college
+        else None
+    )
+    student.branch = (
+        student_data.branch.strip()
+        if student_data.branch
+        else None
+    )
+    student.cgpa = (
+        student_data.cgpa.strip()
+        if student_data.cgpa
+        else None
+    )
 
-    db.commit()
-    db.refresh(student)
+    try:
+        db.commit()
+        db.refresh(student)
+
+    except IntegrityError:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=400,
+            detail="Could not update student profile."
+        )
 
     return {
         "message": "Student profile updated successfully.",
@@ -131,6 +202,6 @@ def update_student(
             "email": student.email,
             "college": student.college,
             "branch": student.branch,
-            "cgpa": student.cgpa,
+            "cgpa": student.cgpa
         }
     }

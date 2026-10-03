@@ -1,61 +1,45 @@
 import { useEffect, useState } from 'react'
 import { Badge, Card, PageHeader, Progress } from '../components/UI'
+import { api } from '../services/api'
 
-type Domain = {
-  name: string
-  alignment: number
-  reason: string
-  existing: string[]
-  missing: string[]
+type DomainRecommendation = {
+  domain: string
+  match_percentage: number
+  matching_skills: string[]
 }
 
 type JobMatch = {
-  id: number
-  title: string
-  company: string
-  location: string
-  alignment: number
-  matched: string[]
-  missing: string[]
+  role: string
+  domain: string
+  level: string
+  match_percentage: number
+  matching_skills: string[]
+  missing_skills: string[]
 }
 
 type SkillGap = {
   skill: string
   status: string
-  current?: number
-  required?: number
+  priority: string
+  reason: string
 }
 
 type CareerAnalysis = {
-  recommended_domains?: Array<{
-    domain: string
-    score?: number
-    reason?: string
-    matching_skills?: string[]
-  }>
+  recommended_domains: DomainRecommendation[]
+  skills_used: string[]
 }
 
 type JobAnalysis = {
-  matches?: Array<{
-    id?: number
-    title: string
-    company?: string
-    location?: string
-    match_score?: number
-    matched_skills?: string[]
-    missing_skills?: string[]
-  }>
+  job_matches: JobMatch[]
+  skills_used: string[]
 }
 
 type SkillGapAnalysis = {
-  target_role?: string
-  target_domain?: string
-  skill_gaps?: Array<{
-    skill: string
-    status: string
-    priority?: string
-    reason?: string
-  }>
+  target_role: string
+  target_domain: string
+  skill_gaps: SkillGap[]
+  missing_skills_count: number
+  total_required_skills: number
 }
 
 type ResumeResponse = {
@@ -64,66 +48,100 @@ type ResumeResponse = {
   skill_gap_analysis: SkillGapAnalysis
 }
 
-export function Domains() {
-  const [data, setData] = useState<ResumeResponse | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+function getStudentId(): number | null {
+  const storedStudent = localStorage.getItem('student')
 
-  useEffect(() => {
-    loadCareerData()
-  }, [])
-
-  const loadCareerData = async () => {
-    try {
-      const storedStudent = localStorage.getItem('student')
-
-      if (!storedStudent) {
-        setError('Please login to view your career analysis.')
-        return
-      }
-
-      const student = JSON.parse(storedStudent)
-      const studentId = student.student_id || student.id
-
-      if (!studentId) {
-        setError('Student ID not found. Please login again.')
-        return
-      }
-
-      const response = await fetch(
-        `http://127.0.0.1:8000/api/resume/latest/${studentId}`
-      )
-
-      const result = await response.json()
-
-      if (!response.ok) {
-        throw new Error(
-          result.detail || 'Failed to load career analysis.'
-        )
-      }
-
-      setData(result)
-    } catch (err) {
-      console.error(err)
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Failed to load career analysis.'
-      )
-    } finally {
-      setLoading(false)
-    }
+  if (!storedStudent) {
+    return null
   }
 
+  try {
+    const student = JSON.parse(storedStudent)
+
+    return student.student_id ?? student.id ?? null
+  } catch {
+    return null
+  }
+}
+
+async function fetchLatestAnalysis(): Promise<ResumeResponse> {
+  const studentId = getStudentId()
+  if (!studentId) throw new Error('Student information not found. Please login again.')
+  return api.getLatestResume(Number(studentId)) as Promise<ResumeResponse>
+}
+
+function LoadingState({
+  message
+}: {
+  message: string
+}) {
+  return (
+    <Card>
+      <p>{message}</p>
+    </Card>
+  )
+}
+
+function ErrorState({
+  message
+}: {
+  message: string
+}) {
+  return (
+    <Card>
+      <p>{message}</p>
+    </Card>
+  )
+}
+
+export function Domains() {
+  const [data, setData] =
+    useState<ResumeResponse | null>(null)
+
+  const [loading, setLoading] =
+    useState(true)
+
+  const [error, setError] =
+    useState('')
+
+  useEffect(() => {
+    fetchLatestAnalysis()
+      .then(setData)
+      .catch((err) => {
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'Failed to load career analysis.'
+        )
+      })
+      .finally(() => {
+        setLoading(false)
+      })
+  }, [])
+
   if (loading) {
-    return <p>Loading career analysis...</p>
+    return (
+      <>
+        <PageHeader
+          title="Career Domains"
+          subtitle="AI-based career directions from your current profile."
+        />
+
+        <LoadingState message="Loading career analysis..." />
+      </>
+    )
   }
 
   if (error) {
     return (
-      <Card>
-        <p>{error}</p>
-      </Card>
+      <>
+        <PageHeader
+          title="Career Domains"
+          subtitle="AI-based career directions from your current profile."
+        />
+
+        <ErrorState message={error} />
+      </>
     )
   }
 
@@ -131,57 +149,55 @@ export function Domains() {
     return null
   }
 
-  const domains: Domain[] =
-    data.career_analysis?.recommended_domains?.map((domain, index) => ({
-      name: domain.domain,
-      alignment: domain.score ?? 0,
-      reason: domain.reason ?? 'Based on your resume skills.',
-      existing: domain.matching_skills ?? [],
-      missing: [],
-    })) ?? []
+  const domains =
+    data.career_analysis?.recommended_domains ?? []
 
   return (
     <>
       <PageHeader
         title="Career Domains"
-        subtitle="Explore potential career directions based on your current profile."
+        subtitle="Career directions generated from your resume and current profile."
       />
 
       {domains.length === 0 ? (
         <Card>
-          <p>No career domain analysis is available yet.</p>
+          <p>
+            No career recommendations are available yet.
+            Upload and analyze your resume first.
+          </p>
         </Card>
       ) : (
         <div className="card-grid">
           {domains.map((domain) => (
-            <Card key={domain.name}>
+            <Card key={domain.domain}>
               <div className="section-title">
-                <h2>{domain.name}</h2>
-                <b>{domain.alignment}%</b>
+                <h2>{domain.domain}</h2>
+
+                <b>
+                  {domain.match_percentage}%
+                </b>
               </div>
 
-              <Progress value={domain.alignment} />
+              <Progress
+                value={domain.match_percentage}
+              />
 
-              <p>{domain.reason}</p>
+              <h3>Skills considered</h3>
 
-              <h3>Existing skills</h3>
-
-              <div className="badges">
-                {domain.existing.map((skill) => (
-                  <Badge key={skill}>{skill}</Badge>
-                ))}
-              </div>
-
-              {domain.missing.length > 0 && (
-                <>
-                  <h3>Skills to develop</h3>
-
-                  <div className="badges">
-                    {domain.missing.map((skill) => (
-                      <Badge key={skill}>{skill}</Badge>
-                    ))}
-                  </div>
-                </>
+              {domain.matching_skills.length > 0 ? (
+                <div className="badges">
+                  {domain.matching_skills.map(
+                    (skill) => (
+                      <Badge key={skill}>
+                        {skill}
+                      </Badge>
+                    )
+                  )}
+                </div>
+              ) : (
+                <p>
+                  No matching skills were detected.
+                </p>
               )}
             </Card>
           ))}
@@ -192,65 +208,53 @@ export function Domains() {
 }
 
 export function Jobs() {
-  const [data, setData] = useState<ResumeResponse | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  const [data, setData] =
+    useState<ResumeResponse | null>(null)
+
+  const [loading, setLoading] =
+    useState(true)
+
+  const [error, setError] =
+    useState('')
 
   useEffect(() => {
-    loadJobData()
+    fetchLatestAnalysis()
+      .then(setData)
+      .catch((err) => {
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'Failed to load job matches.'
+        )
+      })
+      .finally(() => {
+        setLoading(false)
+      })
   }, [])
 
-  const loadJobData = async () => {
-    try {
-      const storedStudent = localStorage.getItem('student')
-
-      if (!storedStudent) {
-        setError('Please login to view job matches.')
-        return
-      }
-
-      const student = JSON.parse(storedStudent)
-      const studentId = student.student_id || student.id
-
-      if (!studentId) {
-        setError('Student ID not found. Please login again.')
-        return
-      }
-
-      const response = await fetch(
-        `http://127.0.0.1:8000/api/resume/latest/${studentId}`
-      )
-
-      const result = await response.json()
-
-      if (!response.ok) {
-        throw new Error(
-          result.detail || 'Failed to load job matches.'
-        )
-      }
-
-      setData(result)
-    } catch (err) {
-      console.error(err)
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Failed to load job matches.'
-      )
-    } finally {
-      setLoading(false)
-    }
-  }
-
   if (loading) {
-    return <p>Loading job matches...</p>
+    return (
+      <>
+        <PageHeader
+          title="Job Matches"
+          subtitle="AI-generated role matches based on your profile."
+        />
+
+        <LoadingState message="Loading job matches..." />
+      </>
+    )
   }
 
   if (error) {
     return (
-      <Card>
-        <p>{error}</p>
-      </Card>
+      <>
+        <PageHeader
+          title="Job Matches"
+          subtitle="AI-generated role matches based on your profile."
+        />
+
+        <ErrorState message={error} />
+      </>
     )
   }
 
@@ -258,64 +262,81 @@ export function Jobs() {
     return null
   }
 
-  const jobs: JobMatch[] =
-    data.job_analysis?.matches?.map((job, index) => ({
-      id: job.id ?? index,
-      title: job.title,
-      company: job.company ?? 'Company not specified',
-      location: job.location ?? 'Location not specified',
-      alignment: job.match_score ?? 0,
-      matched: job.matched_skills ?? [],
-      missing: job.missing_skills ?? [],
-    })) ?? []
+  const jobs =
+    data.job_analysis?.job_matches ?? []
 
   return (
     <>
       <PageHeader
         title="Job Matches"
-        subtitle="Opportunities matched against the skills detected from your resume."
+        subtitle="Roles matched against your current skills and profile."
       />
 
       {jobs.length === 0 ? (
         <Card>
-          <p>No job matches are available yet.</p>
+          <p>
+            No job matches are available yet.
+          </p>
         </Card>
       ) : (
         <div className="card-grid">
-          {jobs.map((job) => (
-            <Card key={job.id}>
+          {jobs.map((job, index) => (
+            <Card
+              key={`${job.role}-${job.domain}-${index}`}
+            >
               <div className="section-title">
                 <div>
-                  <h2>{job.title}</h2>
+                  <h2>{job.role}</h2>
+
                   <p>
-                    {job.company} · {job.location}
+                    {job.domain} · {job.level}
                   </p>
                 </div>
 
-                <b>{job.alignment}%</b>
+                <b>
+                  {job.match_percentage}%
+                </b>
               </div>
 
-              <Progress value={job.alignment} />
+              <Progress
+                value={job.match_percentage}
+              />
 
-              <h3>Matched</h3>
+              <h3>Matching skills</h3>
 
-              <div className="badges">
-                {job.matched.map((skill) => (
-                  <Badge key={skill}>{skill}</Badge>
-                ))}
-              </div>
+              {job.matching_skills.length > 0 ? (
+                <div className="badges">
+                  {job.matching_skills.map(
+                    (skill) => (
+                      <Badge key={skill}>
+                        {skill}
+                      </Badge>
+                    )
+                  )}
+                </div>
+              ) : (
+                <p>
+                  No matching skills detected.
+                </p>
+              )}
 
-              <h3>Missing</h3>
+              <h3>Skills to develop</h3>
 
-              <div className="badges">
-                {job.missing.length > 0 ? (
-                  job.missing.map((skill) => (
-                    <Badge key={skill}>{skill}</Badge>
-                  ))
-                ) : (
-                  <span>No missing skills detected.</span>
-                )}
-              </div>
+              {job.missing_skills.length > 0 ? (
+                <div className="badges">
+                  {job.missing_skills.map(
+                    (skill) => (
+                      <Badge key={skill}>
+                        {skill}
+                      </Badge>
+                    )
+                  )}
+                </div>
+              ) : (
+                <p>
+                  No missing skills detected.
+                </p>
+              )}
             </Card>
           ))}
         </div>
@@ -325,65 +346,53 @@ export function Jobs() {
 }
 
 export function SkillGaps() {
-  const [data, setData] = useState<ResumeResponse | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  const [data, setData] =
+    useState<ResumeResponse | null>(null)
+
+  const [loading, setLoading] =
+    useState(true)
+
+  const [error, setError] =
+    useState('')
 
   useEffect(() => {
-    loadSkillGapData()
+    fetchLatestAnalysis()
+      .then(setData)
+      .catch((err) => {
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'Failed to load skill-gap analysis.'
+        )
+      })
+      .finally(() => {
+        setLoading(false)
+      })
   }, [])
 
-  const loadSkillGapData = async () => {
-    try {
-      const storedStudent = localStorage.getItem('student')
-
-      if (!storedStudent) {
-        setError('Please login to view skill gap analysis.')
-        return
-      }
-
-      const student = JSON.parse(storedStudent)
-      const studentId = student.student_id || student.id
-
-      if (!studentId) {
-        setError('Student ID not found. Please login again.')
-        return
-      }
-
-      const response = await fetch(
-        `http://127.0.0.1:8000/api/resume/latest/${studentId}`
-      )
-
-      const result = await response.json()
-
-      if (!response.ok) {
-        throw new Error(
-          result.detail || 'Failed to load skill gap analysis.'
-        )
-      }
-
-      setData(result)
-    } catch (err) {
-      console.error(err)
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Failed to load skill gap analysis.'
-      )
-    } finally {
-      setLoading(false)
-    }
-  }
-
   if (loading) {
-    return <p>Loading skill gap analysis...</p>
+    return (
+      <>
+        <PageHeader
+          title="Skill Gap Analysis"
+          subtitle="Skills identified from your target career direction."
+        />
+
+        <LoadingState message="Loading skill-gap analysis..." />
+      </>
+    )
   }
 
   if (error) {
     return (
-      <Card>
-        <p>{error}</p>
-      </Card>
+      <>
+        <PageHeader
+          title="Skill Gap Analysis"
+          subtitle="Skills identified from your target career direction."
+        />
+
+        <ErrorState message={error} />
+      </>
     )
   }
 
@@ -391,36 +400,44 @@ export function SkillGaps() {
     return null
   }
 
-  const skillGapAnalysis = data.skill_gap_analysis
+  const analysis =
+    data.skill_gap_analysis
 
-  const gaps: SkillGap[] =
-    skillGapAnalysis?.skill_gaps?.map((gap) => ({
-      skill: gap.skill,
-      status: gap.status,
-    })) ?? []
+  const gaps =
+    analysis?.skill_gaps ?? []
 
   return (
     <>
       <PageHeader
         title="Skill Gap Analysis"
-        subtitle="Compare your current skills with the requirements of your target role."
+        subtitle="Skills identified from your current profile and target direction."
       />
 
       <Card>
         <p>
           <strong>Target Role:</strong>{' '}
-          {skillGapAnalysis?.target_role || 'Not available'}
+          {analysis?.target_role ||
+            'Not available'}
         </p>
 
         <p>
           <strong>Target Domain:</strong>{' '}
-          {skillGapAnalysis?.target_domain || 'Not available'}
+          {analysis?.target_domain ||
+            'Not available'}
+        </p>
+
+        <p>
+          <strong>Missing Skills:</strong>{' '}
+          {analysis?.missing_skills_count ?? 0}
         </p>
       </Card>
 
       {gaps.length === 0 ? (
         <Card>
-          <p>No skill gaps were detected for the current analysis.</p>
+          <p>
+            No skill gaps were identified for the
+            current analysis.
+          </p>
         </Card>
       ) : (
         <div className="card-grid">
@@ -428,13 +445,24 @@ export function SkillGaps() {
             <Card key={gap.skill}>
               <div className="section-title">
                 <h2>{gap.skill}</h2>
-                <Badge>{gap.status}</Badge>
+
+                <Badge>
+                  {gap.status}
+                </Badge>
               </div>
 
-              <p>
-                This skill was identified by the Skill Gap Agent based on
-                your resume and target role.
-              </p>
+              {gap.priority && (
+                <p>
+                  <strong>
+                    Priority:
+                  </strong>{' '}
+                  {gap.priority}
+                </p>
+              )}
+
+              {gap.reason && (
+                <p>{gap.reason}</p>
+              )}
             </Card>
           ))}
         </div>

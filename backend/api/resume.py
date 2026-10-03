@@ -1,4 +1,11 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Form
+from fastapi import (
+    APIRouter,
+    UploadFile,
+    File,
+    HTTPException,
+    Form,
+)
+
 import fitz
 import json
 
@@ -12,11 +19,13 @@ from agents.career_agent import analyze_career_domains
 from agents.job_agent import analyze_job_matches
 from agents.skill_gap_agent import analyze_skill_gaps
 from agents.roadmap_agent import generate_roadmap
+from agents.resume_optimizer_agent import optimize_resume
+from agents.resume_rewrite_agent import rewrite_summary
 
 
 router = APIRouter(
     prefix="/api/resume",
-    tags=["Resume"]
+    tags=["Resume"],
 )
 
 
@@ -25,37 +34,72 @@ def get_db():
         yield session
 
 
+def load_json(value, default):
+    try:
+        return json.loads(value) if value else default
+    except (json.JSONDecodeError, TypeError):
+        return default
+
+
 @router.post("/upload")
 async def upload_resume(
     file: UploadFile = File(...),
-    student_id: int = Form(...)
+    student_id: int = Form(...),
 ):
+    if student_id <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Valid student ID is required.",
+        )
+
+    if not file.filename:
+        raise HTTPException(
+            status_code=400,
+            detail="A resume file is required.",
+        )
 
     if file.content_type != "application/pdf":
         raise HTTPException(
             status_code=400,
-            detail="Only PDF files are allowed."
+            detail="Only PDF files are allowed.",
         )
 
     contents = await file.read()
 
-    try:
-        pdf = fitz.open(
-            stream=contents,
-            filetype="pdf"
+    if not contents:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded PDF is empty.",
         )
 
-        text = ""
+    pdf = None
+
+    try:
+        # =========================
+        # EXTRACT RESUME TEXT
+        # =========================
+        pdf = fitz.open(
+            stream=contents,
+            filetype="pdf",
+        )
+
+        text_parts = []
 
         for page in pdf:
-            text += page.get_text() + "\n"
+            page_text = page.get_text()
 
-        pdf.close()
+            if page_text:
+                text_parts.append(page_text)
 
-        if not text.strip():
+        text = "\n".join(text_parts).strip()
+
+        if not text:
             raise HTTPException(
                 status_code=400,
-                detail="Could not extract text from the PDF."
+                detail=(
+                    "Could not extract text from the PDF. "
+                    "Make sure the PDF contains selectable text."
+                ),
             )
 
         # =========================
@@ -75,7 +119,7 @@ async def upload_resume(
         # =========================
         job_analysis = analyze_job_matches(
             resume_analysis,
-            career_analysis
+            career_analysis,
         )
 
         # =========================
@@ -83,55 +127,64 @@ async def upload_resume(
         # =========================
         skill_gap_analysis = analyze_skill_gaps(
             resume_analysis,
-            job_analysis
+            job_analysis,
         )
 
         # =========================
         # AGENT 5 — ROADMAP
         # =========================
         roadmap_analysis = generate_roadmap(
-            skill_gap_analysis
+            skill_gap_analysis=skill_gap_analysis,
+            resume_analysis=resume_analysis,
+            job_analysis=job_analysis,
         )
 
         # =========================
-        # SAVE TO POSTGRESQL
+        # SAVE ANALYSIS
         # =========================
         db = next(get_db())
 
         try:
             new_analysis = ResumeAnalysis(
                 student_id=student_id,
-
                 filename=file.filename,
+
+                candidate_email=resume_analysis.get(
+                    "candidate_email"
+                ),
+
+                candidate_phone=resume_analysis.get(
+                    "candidate_phone"
+                ),
 
                 resume_score=resume_analysis.get(
                     "resume_score",
-                    0
+                    0,
                 ),
 
                 word_count=resume_analysis.get(
                     "word_count",
-                    0
+                    0,
                 ),
 
                 skills=json.dumps(
                     resume_analysis.get(
                         "skills",
-                        []
+                        [],
                     )
                 ),
 
                 education=json.dumps(
                     resume_analysis.get(
                         "education",
-                        []
+                        [],
                     )
                 ),
 
                 detected_sections=json.dumps(
                     resume_analysis.get(
                         "detected_sections",
-                        []
+                        [],
                     )
                 ),
 
@@ -149,50 +202,59 @@ async def upload_resume(
 
                 roadmap_analysis=json.dumps(
                     roadmap_analysis
-                )
+                ),
             )
 
             db.add(new_analysis)
-
             db.commit()
-
             db.refresh(new_analysis)
+
+            analysis_id = new_analysis.id
+
+        except Exception:
+            db.rollback()
+            raise
 
         finally:
             db.close()
 
         return {
-            "message": "Resume processed and saved successfully.",
-
-            "analysis_id": new_analysis.id,
-
+            "message": (
+                "Resume processed and saved successfully."
+            ),
+            "analysis_id": analysis_id,
             "filename": file.filename,
-
             "resume_analysis": resume_analysis,
-
             "career_analysis": career_analysis,
-
             "job_analysis": job_analysis,
-
             "skill_gap_analysis": skill_gap_analysis,
-
-            "roadmap_analysis": roadmap_analysis
+            "roadmap_analysis": roadmap_analysis,
         }
 
     except HTTPException:
         raise
 
-    except Exception as e:
+    except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Error processing resume: {str(e)}"
+            detail=f"Error processing resume: {str(exc)}",
         )
+
+    finally:
+        if pdf is not None:
+            pdf.close()
 
 
 @router.get("/latest/{student_id}")
 def get_latest_resume_analysis(
-    student_id: int
+    student_id: int,
 ):
+    if student_id <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Valid student ID is required.",
+        )
+
     db = next(get_db())
 
     try:
@@ -210,47 +272,193 @@ def get_latest_resume_analysis(
         if not analysis:
             raise HTTPException(
                 status_code=404,
-                detail="No resume analysis found for this student."
+                detail=(
+                    "No resume analysis found "
+                    "for this student."
+                ),
             )
 
         return {
             "analysis_id": analysis.id,
-
             "student_id": analysis.student_id,
-
             "filename": analysis.filename,
 
-            "resume_score": analysis.resume_score,
-
-            "word_count": analysis.word_count,
-
-            "skills": json.loads(
-                analysis.skills or "[]"
+            "candidate_email": (
+                analysis.candidate_email
             ),
 
-            "education": json.loads(
-                analysis.education or "[]"
+            "candidate_phone": (
+                analysis.candidate_phone
             ),
 
-            "detected_sections": json.loads(
-                analysis.detected_sections or "[]"
+            "resume_score": (
+                analysis.resume_score or 0
             ),
 
-            "career_analysis": json.loads(
-                analysis.career_analysis or "{}"
+            "word_count": (
+                analysis.word_count or 0
             ),
 
-            "job_analysis": json.loads(
-                analysis.job_analysis or "{}"
+            "skills": load_json(
+                analysis.skills,
+                [],
             ),
 
-            "skill_gap_analysis": json.loads(
-                analysis.skill_gap_analysis or "{}"
+            "education": load_json(
+                analysis.education,
+                [],
             ),
 
-            "roadmap_analysis": json.loads(
-                analysis.roadmap_analysis or "{}"
+            "detected_sections": load_json(
+                analysis.detected_sections,
+                [],
+            ),
+
+            "career_analysis": load_json(
+                analysis.career_analysis,
+                {},
+            ),
+
+            "job_analysis": load_json(
+                analysis.job_analysis,
+                {},
+            ),
+
+            "skill_gap_analysis": load_json(
+                analysis.skill_gap_analysis,
+                {},
+            ),
+
+            "roadmap_analysis": load_json(
+                analysis.roadmap_analysis,
+                {},
+            ),
+        }
+
+    finally:
+        db.close()
+
+
+@router.get("/optimize/{analysis_id}")
+def optimize_existing_resume(
+    analysis_id: int,
+):
+    if analysis_id <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Valid analysis ID is required.",
+        )
+
+    db = next(get_db())
+
+    try:
+        analysis = (
+            db.query(ResumeAnalysis)
+            .filter(
+                ResumeAnalysis.id == analysis_id
             )
+            .first()
+        )
+
+        if not analysis:
+            raise HTTPException(
+                status_code=404,
+                detail="Resume analysis not found.",
+            )
+
+        resume_analysis = {
+            "candidate_email": (
+                analysis.candidate_email
+            ),
+
+            "candidate_phone": (
+                analysis.candidate_phone
+            ),
+
+            "skills": load_json(
+                analysis.skills,
+                [],
+            ),
+
+            "education": load_json(
+                analysis.education,
+                [],
+            ),
+
+            "detected_sections": load_json(
+                analysis.detected_sections,
+                [],
+            ),
+
+            "resume_score": (
+                analysis.resume_score or 0
+            ),
+
+            "word_count": (
+                analysis.word_count or 0
+            ),
+        }
+
+        optimization = optimize_resume(
+            resume_analysis
+        )
+
+        return {
+            "analysis_id": analysis.id,
+            "optimization": optimization,
+        }
+
+    finally:
+        db.close()
+
+
+@router.post("/rewrite-summary")
+def rewrite_resume_summary(
+    summary: str,
+    analysis_id: int,
+):
+    if analysis_id <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Valid analysis ID is required.",
+        )
+
+    if not summary.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Summary cannot be empty.",
+        )
+
+    db = next(get_db())
+
+    try:
+        analysis = (
+            db.query(ResumeAnalysis)
+            .filter(
+                ResumeAnalysis.id == analysis_id
+            )
+            .first()
+        )
+
+        if not analysis:
+            raise HTTPException(
+                status_code=404,
+                detail="Resume analysis not found.",
+            )
+
+        skills = load_json(
+            analysis.skills,
+            [],
+        )
+
+        result = rewrite_summary(
+            summary=summary,
+            skills=skills,
+        )
+
+        return {
+            "analysis_id": analysis_id,
+            "result": result,
         }
 
     finally:
