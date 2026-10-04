@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+import json
 
 from database.connection import engine
 from database.models import Student
@@ -16,6 +17,31 @@ router = APIRouter(
 def get_db():
     with Session(engine) as session:
         yield session
+
+
+def load_list(value):
+    """Safely convert stored JSON text into a Python list."""
+    if not value:
+        return []
+
+    try:
+        data = json.loads(value)
+
+        if isinstance(data, list):
+            return data
+
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    return []
+
+
+def save_list(value):
+    """Convert a Python list into JSON text for PostgreSQL."""
+    if not value:
+        return "[]"
+
+    return json.dumps(value)
 
 
 @router.post("/")
@@ -68,6 +94,27 @@ def create_student(
             if student.cgpa
             else None
         ),
+
+        # Extended profile fields
+        phone=(
+            student.phone.strip()
+            if student.phone
+            else None
+        ),
+        location=(
+            student.location.strip()
+            if student.location
+            else None
+        ),
+        degree=(
+            student.degree.strip()
+            if student.degree
+            else "B.Tech"
+        ),
+        skills=save_list(student.skills),
+        soft_skills=save_list(student.softSkills),
+        interests=save_list(student.interests),
+
         password_hash=""
     )
 
@@ -119,7 +166,15 @@ def get_student(
         "email": student.email,
         "college": student.college,
         "branch": student.branch,
-        "cgpa": student.cgpa
+        "cgpa": student.cgpa,
+
+        # Extended profile
+        "phone": student.phone or "",
+        "location": student.location or "",
+        "degree": student.degree or "B.Tech",
+        "skills": load_list(student.skills),
+        "softSkills": load_list(student.soft_skills),
+        "interests": load_list(student.interests)
     }
 
 
@@ -166,21 +221,47 @@ def update_student(
 
     student.name = student_data.name.strip()
     student.email = email
+
     student.college = (
         student_data.college.strip()
         if student_data.college
         else None
     )
+
     student.branch = (
         student_data.branch.strip()
         if student_data.branch
         else None
     )
+
     student.cgpa = (
         student_data.cgpa.strip()
         if student_data.cgpa
         else None
     )
+
+    # Extended profile
+    student.phone = (
+        student_data.phone.strip()
+        if student_data.phone
+        else None
+    )
+
+    student.location = (
+        student_data.location.strip()
+        if student_data.location
+        else None
+    )
+
+    student.degree = (
+        student_data.degree.strip()
+        if student_data.degree
+        else "B.Tech"
+    )
+
+    student.skills = save_list(student_data.skills)
+    student.soft_skills = save_list(student_data.softSkills)
+    student.interests = save_list(student_data.interests)
 
     try:
         db.commit()
@@ -202,6 +283,13 @@ def update_student(
             "email": student.email,
             "college": student.college,
             "branch": student.branch,
-            "cgpa": student.cgpa
+            "cgpa": student.cgpa,
+
+            "phone": student.phone or "",
+            "location": student.location or "",
+            "degree": student.degree or "B.Tech",
+            "skills": load_list(student.skills),
+            "softSkills": load_list(student.soft_skills),
+            "interests": load_list(student.interests)
         }
     }

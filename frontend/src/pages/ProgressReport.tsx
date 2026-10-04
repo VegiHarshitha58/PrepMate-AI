@@ -8,38 +8,57 @@ import {
   RadarChart,
   Radar,
   PolarGrid,
-  PolarAngleAxis
+  PolarAngleAxis,
 } from 'recharts'
+
 import { useEffect, useMemo, useState } from 'react'
+
 import { Card, PageHeader, Progress } from '../components/UI'
 import { api } from '../services/api'
 
 type SkillGap = {
   skill: string
+  status?: string
   priority?: string
+  reason?: string
+}
+
+type CareerDomain = {
+  domain: string
+  match_percentage: number
+  matching_skills?: string[]
+}
+
+type JobMatch = {
+  role: string
+  domain?: string
+  level?: string
+  match_percentage: number
+  matching_skills?: string[]
+  missing_skills?: string[]
+  reason?: string
+}
+
+type RoadmapItem = {
+  week: number
+  title?: string
+  description?: string
+  skill?: string
+  done?: boolean
 }
 
 type Analysis = {
   id?: number
+  analysis_id?: number
+
   resume_score?: number
 
   career_analysis?: {
-    recommended_domains?: Array<{
-      domain: string
-      match_percentage: number
-      matching_skills?: string[]
-    }>
+    recommended_domains?: CareerDomain[]
   }
 
   job_analysis?: {
-    job_matches?: Array<{
-      role: string
-      domain?: string
-      level?: string
-      match_percentage: number
-      matching_skills?: string[]
-      missing_skills?: string[]
-    }>
+    job_matches?: JobMatch[]
   }
 
   skill_gap_analysis?: {
@@ -48,13 +67,14 @@ type Analysis = {
     skill_gaps?: SkillGap[]
     missing_skills_count?: number
     total_required_skills?: number
+    missing_skills?: unknown[]
+    required_skills?: unknown[]
+    matched_skills?: unknown[]
+    matching_skills?: unknown[]
   }
 
   roadmap_analysis?: {
-    roadmap?: Array<{
-      week: number
-      done?: boolean
-    }>
+    roadmap?: RoadmapItem[]
   }
 }
 
@@ -69,51 +89,478 @@ type InterviewResult = {
   relevance_score?: number
   communication_score?: number
   clarity_score?: number
+  answered_questions?: number
+  total_questions?: number
 }
+
+/* =========================================================
+   GENERAL HELPERS
+   ========================================================= */
 
 function getStudentId(): number | null {
   const stored = localStorage.getItem('student')
 
-  if (!stored) return null
+  if (!stored) {
+    return null
+  }
 
   try {
     const student = JSON.parse(stored)
-    const id = Number(student?.student_id ?? student?.id)
 
-    return Number.isFinite(id) && id > 0 ? id : null
+    const id = Number(
+      student?.student_id ??
+        student?.id
+    )
+
+    return Number.isFinite(id) && id > 0
+      ? id
+      : null
   } catch {
     return null
   }
 }
 
-function clamp(value: number) {
-  return Math.min(100, Math.max(0, Math.round(value)))
+function clamp(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0
+  }
+
+  return Math.min(
+    100,
+    Math.max(
+      0,
+      Math.round(value)
+    )
+  )
+}
+
+function parseJsonValue<T>(
+  value: unknown
+): T | null {
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return null
+  }
+
+  if (
+    typeof value === 'object'
+  ) {
+    return value as T
+  }
+
+  if (
+    typeof value === 'string'
+  ) {
+    try {
+      return JSON.parse(value) as T
+    } catch {
+      return null
+    }
+  }
+
+  return null
+}
+
+function uniqueStrings(
+  values: unknown[]
+): string[] {
+  return Array.from(
+    new Set(
+      values
+        .map(value => {
+          if (
+            typeof value === 'string'
+          ) {
+            return value.trim()
+          }
+
+          if (
+            value &&
+            typeof value === 'object'
+          ) {
+            const item =
+              value as Record<
+                string,
+                unknown
+              >
+
+            return String(
+              item.skill ??
+                item.name ??
+                item.title ??
+                ''
+            ).trim()
+          }
+
+          return ''
+        })
+        .filter(Boolean)
+    )
+  )
 }
 
 /* =========================================================
-   GLOBAL SETTINGS HELPERS
+   SKILL COVERAGE
    ========================================================= */
 
-function applyAppearance(value: string) {
-  const root = document.documentElement
-  const body = document.body
+function calculateSkillCoverage(
+  skillGap:
+    | Analysis['skill_gap_analysis']
+    | undefined,
+  jobs: JobMatch[]
+): number {
+  if (!skillGap) {
+    return 0
+  }
 
-  root.setAttribute('data-theme', value.toLowerCase())
+  /*
+   * First use the explicit counts generated
+   * by the Skill Gap Agent.
+   */
+
+  const required = Number(
+    skillGap.total_required_skills
+  )
+
+  const missing = Number(
+    skillGap.missing_skills_count
+  )
+
+  if (
+    Number.isFinite(required) &&
+    required > 0
+  ) {
+    const safeMissing =
+      Number.isFinite(missing)
+        ? Math.max(
+            0,
+            Math.min(
+              required,
+              missing
+            )
+          )
+        : 0
+
+    return clamp(
+      (
+        (required - safeMissing) /
+        required
+      ) * 100
+    )
+  }
+
+  /*
+   * Fallback: calculate coverage from
+   * the actual skill-gap and job data.
+   */
+
+  const gaps =
+    Array.isArray(
+      skillGap.skill_gaps
+    )
+      ? skillGap.skill_gaps
+      : []
+
+  const missingFromGaps =
+    gaps
+      .filter(gap =>
+        String(
+          gap.status ?? ''
+        )
+          .toLowerCase()
+          .includes('missing')
+      )
+      .map(
+        gap => gap.skill
+      )
+
+  const matchedSkills =
+    uniqueStrings(
+      jobs.flatMap(job =>
+        Array.isArray(
+          job.matching_skills
+        )
+          ? job.matching_skills
+          : []
+      )
+    )
+
+  const missingSkills =
+    uniqueStrings([
+      ...missingFromGaps,
+
+      ...jobs.flatMap(job =>
+        Array.isArray(
+          job.missing_skills
+        )
+          ? job.missing_skills
+          : []
+      )
+    ])
+
+  const missingOnly =
+    missingSkills.filter(
+      skill =>
+        !matchedSkills.some(
+          matched =>
+            matched.toLowerCase() ===
+            skill.toLowerCase()
+        )
+    )
+
+  const total =
+    matchedSkills.length +
+    missingOnly.length
+
+  if (total > 0) {
+    return clamp(
+      (
+        matchedSkills.length /
+        total
+      ) * 100
+    )
+  }
+
+  if (
+    gaps.length === 0 &&
+    missingSkills.length === 0
+  ) {
+    return 100
+  }
+
+  return 0
+}
+
+/* =========================================================
+   INTERVIEW RESULT
+   ========================================================= */
+
+function findInterviewResult(
+  studentId: number
+): InterviewResult | null {
+  const keys = [
+    `prepmate_interview_result_${studentId}`,
+    ...Object.keys(
+      localStorage
+    ).filter(key =>
+      key
+        .toLowerCase()
+        .includes('interview')
+    )
+  ]
+
+  const checkedKeys =
+    new Set<string>()
+
+  for (const key of keys) {
+    if (
+      checkedKeys.has(key)
+    ) {
+      continue
+    }
+
+    checkedKeys.add(key)
+
+    const raw =
+      localStorage.getItem(key)
+
+    if (!raw) {
+      continue
+    }
+
+    try {
+      const parsed =
+        JSON.parse(raw)
+
+      const candidates = [
+        parsed,
+        parsed?.evaluation,
+        parsed?.result,
+        parsed?.data,
+        parsed?.data?.evaluation,
+        parsed?.data?.result
+      ]
+
+      for (
+        const candidate of
+        candidates
+      ) {
+        if (
+          !candidate ||
+          typeof candidate !==
+            'object'
+        ) {
+          continue
+        }
+
+        if (
+          !Number.isFinite(
+            Number(
+              candidate.overall_score
+            )
+          )
+        ) {
+          continue
+        }
+
+        return {
+          overall_score:
+            Number(
+              candidate.overall_score
+            ),
+
+          technical_score:
+            Number(
+              candidate.technical_score ??
+                0
+            ),
+
+          relevance_score:
+            Number(
+              candidate.relevance_score ??
+                0
+            ),
+
+          communication_score:
+            Number(
+              candidate.communication_score ??
+                0
+            ),
+
+          clarity_score:
+            Number(
+              candidate.clarity_score ??
+                0
+            ),
+
+          answered_questions:
+            Number(
+              candidate.answered_questions ??
+                0
+            ),
+
+          total_questions:
+            Number(
+              candidate.total_questions ??
+                0
+            )
+        }
+      }
+    } catch {
+      continue
+    }
+  }
+
+  return null
+}
+
+/* =========================================================
+   LOAD LATEST ANALYSIS
+   ========================================================= */
+
+async function loadLatestAnalysis(
+  studentId: number
+): Promise<Analysis> {
+  const response =
+    await api.getLatestResume(
+      studentId
+    )
+
+  const raw =
+    response as Record<
+      string,
+      unknown
+    >
+
+  const analysisId =
+    Number(
+      raw.analysis_id ??
+        raw.id ??
+        0
+    ) || undefined
+
+  return {
+    id: analysisId,
+
+    analysis_id:
+      analysisId,
+
+    resume_score:
+      Number(
+        raw.resume_score ??
+          0
+      ),
+
+    career_analysis:
+      parseJsonValue(
+        raw.career_analysis
+      ) ?? undefined,
+
+    job_analysis:
+      parseJsonValue(
+        raw.job_analysis
+      ) ?? undefined,
+
+    skill_gap_analysis:
+      parseJsonValue(
+        raw.skill_gap_analysis
+      ) ?? undefined,
+
+    roadmap_analysis:
+      parseJsonValue(
+        raw.roadmap_analysis
+      ) ?? undefined
+  }
+}
+
+/* =========================================================
+   SETTINGS HELPERS
+   ========================================================= */
+
+function applyAppearance(
+  value: string
+) {
+  const root =
+    document.documentElement
+
+  const body =
+    document.body
+
+  root.setAttribute(
+    'data-theme',
+    value.toLowerCase()
+  )
 
   if (value === 'Dark') {
-    root.classList.add('prepmate-dark')
-    body.classList.add('prepmate-dark')
+    root.classList.add(
+      'prepmate-dark'
+    )
+
+    body.classList.add(
+      'prepmate-dark'
+    )
   } else {
-    root.classList.remove('prepmate-dark')
-    body.classList.remove('prepmate-dark')
+    root.classList.remove(
+      'prepmate-dark'
+    )
+
+    body.classList.remove(
+      'prepmate-dark'
+    )
   }
 }
 
 function applySavedSettings() {
-  const savedAppearance =
-    localStorage.getItem('prepmate_appearance') || 'System'
+  const appearance =
+    localStorage.getItem(
+      'prepmate_appearance'
+    ) || 'System'
 
-  applyAppearance(savedAppearance)
+  applyAppearance(
+    appearance
+  )
 }
 
 /* =========================================================
@@ -121,72 +568,191 @@ function applySavedSettings() {
    ========================================================= */
 
 export function ProgressPage() {
-  const [analysis, setAnalysis] =
-    useState<Analysis | null>(null)
+  const [
+    analysis,
+    setAnalysis
+  ] = useState<
+    Analysis | null
+  >(null)
 
-  const [roadmapProgress, setRoadmapProgress] =
-    useState<RoadmapProgress[]>([])
+  const [
+    roadmapProgress,
+    setRoadmapProgress
+  ] = useState<
+    RoadmapProgress[]
+  >([])
 
-  const [interview, setInterview] =
-    useState<InterviewResult | null>(null)
+  const [
+    interview,
+    setInterview
+  ] = useState<
+    InterviewResult | null
+  >(null)
 
-  const [loading, setLoading] =
-    useState(true)
+  const [
+    loading,
+    setLoading
+  ] = useState(true)
 
-  const [error, setError] =
-    useState('')
+  const [
+    error,
+    setError
+  ] = useState('')
 
   useEffect(() => {
     const load = async () => {
-      const studentId = getStudentId()
+      const studentId =
+        getStudentId()
 
       if (!studentId) {
         setError(
           'Student information is not available.'
         )
+
         setLoading(false)
+
         return
       }
 
       try {
-        const response =
-          await api.getLatestResume(studentId)
+        /*
+         * LOAD LATEST ANALYSIS
+         */
 
         const currentAnalysis =
-          response as Analysis
-
-        setAnalysis(currentAnalysis)
-
-        if (currentAnalysis.id) {
-          try {
-            const progress =
-              await api.getRoadmapProgress(
-                studentId,
-                currentAnalysis.id
-              )
-
-            if (Array.isArray(progress)) {
-              setRoadmapProgress(progress)
-            }
-          } catch {
-            setRoadmapProgress([])
-          }
-        }
-
-        const savedInterview =
-          localStorage.getItem(
-            `prepmate_interview_result_${studentId}`
+          await loadLatestAnalysis(
+            studentId
           )
 
-        if (savedInterview) {
+        setAnalysis(
+          currentAnalysis
+        )
+
+        /*
+         * LOAD ROADMAP PROGRESS
+         */
+
+        const analysisId =
+          Number(
+            currentAnalysis.analysis_id ??
+              currentAnalysis.id ??
+              0
+          )
+
+        if (analysisId > 0) {
           try {
-            setInterview(
-              JSON.parse(savedInterview)
+            const response =
+              await api.getRoadmapProgress(
+                studentId,
+                analysisId
+              )
+
+            let items:
+              unknown[] = []
+
+            if (
+              Array.isArray(
+                response
+              )
+            ) {
+              items =
+                response
+            } else if (
+              response &&
+              typeof response ===
+                'object'
+            ) {
+              const object =
+                response as Record<
+                  string,
+                  unknown
+                >
+
+              if (
+                Array.isArray(
+                  object.progress
+                )
+              ) {
+                items =
+                  object.progress
+              } else if (
+                Array.isArray(
+                  object.data
+                )
+              ) {
+                items =
+                  object.data
+              } else if (
+                Array.isArray(
+                  object.items
+                )
+              ) {
+                items =
+                  object.items
+              }
+            }
+
+            const normalized =
+              items
+                .map(item => {
+                  if (
+                    !item ||
+                    typeof item !==
+                      'object'
+                  ) {
+                    return null
+                  }
+
+                  const value =
+                    item as Record<
+                      string,
+                      unknown
+                    >
+
+                  return {
+                    week:
+                      Number(
+                        value.week ??
+                          value.week_number ??
+                          0
+                      ),
+
+                    done:
+                      value.done ===
+                        true ||
+                      value.done ===
+                        1 ||
+                      value.done ===
+                        'true'
+                  }
+                })
+                .filter(
+                  (
+                    item
+                  ): item is RoadmapProgress =>
+                    item !== null &&
+                    item.week > 0
+                )
+
+            setRoadmapProgress(
+              normalized
             )
           } catch {
-            setInterview(null)
+            setRoadmapProgress(
+              []
+            )
           }
         }
+
+        /*
+         * LOAD INTERVIEW
+         */
+
+        setInterview(
+          findInterviewResult(
+            studentId
+          )
+        )
       } catch (err) {
         setError(
           err instanceof Error
@@ -201,134 +767,115 @@ export function ProgressPage() {
     load()
   }, [])
 
-  const metrics = useMemo(() => {
-    const resume = clamp(
-      Number(
-        analysis?.resume_score ?? 0
-      )
-    )
+  /*
+   * METRICS
+   */
 
-    const domains =
-      analysis?.career_analysis
-        ?.recommended_domains ?? []
+  const metrics =
+    useMemo(() => {
+      const resume =
+        clamp(
+          Number(
+            analysis?.resume_score ??
+              0
+          )
+        )
 
-    const career = clamp(
-      domains.length
-        ? domains.reduce(
-            (sum, item) =>
-              sum +
-              Number(
-                item.match_percentage || 0
-              ),
-            0
-          ) / domains.length
-        : 0
-    )
+      const domains =
+        analysis
+          ?.career_analysis
+          ?.recommended_domains ??
+        []
 
-    const totalRequired =
-      Number(
-        analysis?.skill_gap_analysis
-          ?.total_required_skills ?? 0
-      )
+      const jobs =
+        analysis
+          ?.job_analysis
+          ?.job_matches ??
+        []
 
-    const missing =
-      Number(
-        analysis?.skill_gap_analysis
-          ?.missing_skills_count ?? 0
-      )
+      const career =
+        domains.length > 0
+          ? clamp(
+              domains.reduce(
+                (
+                  sum,
+                  item
+                ) =>
+                  sum +
+                  Number(
+                    item.match_percentage ??
+                      0
+                  ),
+                0
+              ) /
+                domains.length
+            )
+          : 0
 
-    const skillCoverage = clamp(
-      totalRequired > 0
-        ? ((totalRequired - missing) /
-            totalRequired) *
-            100
-        : 0
-    )
+      const skillCoverage =
+        calculateSkillCoverage(
+          analysis
+            ?.skill_gap_analysis,
+          jobs
+        )
 
-    const roadmap =
-      analysis?.roadmap_analysis
-        ?.roadmap ?? []
+      const roadmap =
+        analysis
+          ?.roadmap_analysis
+          ?.roadmap ??
+        []
 
-    const roadmapDone =
-      roadmap.filter(item =>
-        roadmapProgress.some(
-          progress =>
-            progress.week === item.week &&
-            progress.done
-        ) || item.done
-      ).length
+      const roadmapDone =
+        roadmap.filter(
+          item => {
+            const saved =
+              roadmapProgress.find(
+                progress =>
+                  Number(
+                    progress.week
+                  ) ===
+                    Number(
+                      item.week
+                    )
+              )
 
-    const roadmapScore = clamp(
-      roadmap.length
-        ? (roadmapDone / roadmap.length) *
-            100
-        : 0
-    )
+            return Boolean(
+              saved?.done ||
+                item.done
+            )
+          }
+        ).length
 
-    const interviewScore = clamp(
-      Number(
-        interview?.overall_score ?? 0
-      )
-    )
+      const roadmapScore =
+        roadmap.length > 0
+          ? clamp(
+              (
+                roadmapDone /
+                roadmap.length
+              ) * 100
+            )
+          : 0
 
-    return {
-      resume,
-      career,
-      skillCoverage,
-      roadmapScore,
-      interviewScore
-    }
-  }, [
-    analysis,
-    roadmapProgress,
-    interview
-  ])
+      const interviewScore =
+        clamp(
+          Number(
+            interview?.overall_score ??
+              0
+          )
+        )
 
-  const trend = [
-    {
-      week: 'Resume',
-      score: metrics.resume
-    },
-    {
-      week: 'Career',
-      score: metrics.career
-    },
-    {
-      week: 'Skills',
-      score: metrics.skillCoverage
-    },
-    {
-      week: 'Roadmap',
-      score: metrics.roadmapScore
-    },
-    {
-      week: 'Interview',
-      score: metrics.interviewScore
-    }
-  ]
-
-  const radar = [
-    {
-      area: 'Resume',
-      value: metrics.resume
-    },
-    {
-      area: 'Skills',
-      value: metrics.skillCoverage
-    },
-    {
-      area: 'Career',
-      value: metrics.career
-    },
-    {
-      area: 'Interview',
-      value: metrics.interviewScore
-    },
-    {
-      area: 'Roadmap',
-      value: metrics.roadmapScore
-    }
-  ]
+      return {
+        resume,
+        career,
+        skillCoverage,
+        roadmapScore,
+        interviewScore
+      }
+    }, [
+      analysis,
+      roadmapProgress,
+      interview
+    ])
 
   if (loading) {
     return (
@@ -340,7 +887,8 @@ export function ProgressPage() {
 
         <Card>
           <p>
-            Loading AI-generated progress data...
+            Loading AI-generated
+            progress data...
           </p>
         </Card>
       </>
@@ -364,6 +912,81 @@ export function ProgressPage() {
     )
   }
 
+  const trend = [
+    {
+      week: 'Resume',
+      score: metrics.resume
+    },
+    {
+      week: 'Career',
+      score: metrics.career
+    },
+    {
+      week: 'Skills',
+      score:
+        metrics.skillCoverage
+    },
+    {
+      week: 'Roadmap',
+      score:
+        metrics.roadmapScore
+    },
+    {
+      week: 'Interview',
+      score:
+        metrics.interviewScore
+    }
+  ]
+
+  const radar = [
+    {
+      area: 'Resume',
+      value: metrics.resume
+    },
+    {
+      area: 'Skills',
+      value:
+        metrics.skillCoverage
+    },
+    {
+      area: 'Career',
+      value: metrics.career
+    },
+    {
+      area: 'Interview',
+      value:
+        metrics.interviewScore
+    },
+    {
+      area: 'Roadmap',
+      value:
+        metrics.roadmapScore
+    }
+  ]
+
+  const cards = [
+    [
+      'Resume',
+      metrics.resume
+    ],
+    [
+      'Career Alignment',
+      metrics.career
+    ],
+    [
+      'Skill Coverage',
+      metrics.skillCoverage
+    ],
+    [
+      'Roadmap Progress',
+      metrics.roadmapScore
+    ],
+    [
+      'Interview Readiness',
+      metrics.interviewScore
+    ]
+  ] as const
+
   return (
     <>
       <PageHeader
@@ -373,18 +996,29 @@ export function ProgressPage() {
 
       <div className="two-col">
         <Card>
-          <h2>Readiness Trend</h2>
+          <h2>
+            Readiness Trend
+          </h2>
 
           <div className="chart">
             <ResponsiveContainer
               width="100%"
               height={260}
             >
-              <LineChart data={trend}>
-                <XAxis dataKey="week" />
-                <YAxis
-                  domain={[0, 100]}
+              <LineChart
+                data={trend}
+              >
+                <XAxis
+                  dataKey="week"
                 />
+
+                <YAxis
+                  domain={[
+                    0,
+                    100
+                  ]}
+                />
+
                 <Tooltip />
 
                 <Line
@@ -407,8 +1041,11 @@ export function ProgressPage() {
               width="100%"
               height={260}
             >
-              <RadarChart data={radar}>
+              <RadarChart
+                data={radar}
+              >
                 <PolarGrid />
+
                 <PolarAngleAxis
                   dataKey="area"
                 />
@@ -424,42 +1061,102 @@ export function ProgressPage() {
       </div>
 
       <div className="card-grid">
-        {[
-          ['Resume', metrics.resume],
-          [
-            'Career Alignment',
-            metrics.career
-          ],
-          [
-            'Skill Coverage',
-            metrics.skillCoverage
-          ],
-          [
-            'Roadmap Progress',
-            metrics.roadmapScore
-          ],
-          [
-            'Interview Readiness',
-            metrics.interviewScore
-          ]
-        ].map(([label, value]) => (
-          <Card key={String(label)}>
-            <div className="section-title">
-              <h3>
-                {String(label)}
-              </h3>
+        {cards.map(
+          ([label, value]) => (
+            <Card
+              key={label}
+            >
+              <div className="section-title">
+                <h3>
+                  {label}
+                </h3>
 
-              <b>
-                {Number(value)}%
-              </b>
+                <b>
+                  {value}%
+                </b>
+              </div>
+
+              <Progress
+                value={value}
+              />
+            </Card>
+          )
+        )}
+      </div>
+
+      {interview && (
+        <Card>
+          <h2>
+            Interview Evaluation
+          </h2>
+
+          <div className="card-grid">
+            <div>
+              <strong>
+                Overall
+              </strong>
+
+              <p>
+                {clamp(
+                  Number(
+                    interview.overall_score ??
+                      0
+                  )
+                )}
+                %
+              </p>
             </div>
 
-            <Progress
-              value={Number(value)}
-            />
-          </Card>
-        ))}
-      </div>
+            <div>
+              <strong>
+                Technical
+              </strong>
+
+              <p>
+                {clamp(
+                  Number(
+                    interview.technical_score ??
+                      0
+                  )
+                )}
+                %
+              </p>
+            </div>
+
+            <div>
+              <strong>
+                Relevance
+              </strong>
+
+              <p>
+                {clamp(
+                  Number(
+                    interview.relevance_score ??
+                      0
+                  )
+                )}
+                %
+              </p>
+            </div>
+
+            <div>
+              <strong>
+                Communication
+              </strong>
+
+              <p>
+                {clamp(
+                  Number(
+                    interview.communication_score ??
+                      0
+                  )
+                )}
+                %
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
     </>
   )
 }
@@ -469,17 +1166,34 @@ export function ProgressPage() {
    ========================================================= */
 
 export function Report() {
-  const [analysis, setAnalysis] =
-    useState<Analysis | null>(null)
+  const [
+    analysis,
+    setAnalysis
+  ] = useState<
+    Analysis | null
+  >(null)
 
-  const [studentName, setStudentName] =
-    useState('Student')
+  const [
+    studentName,
+    setStudentName
+  ] = useState('Student')
 
-  const [loading, setLoading] =
-    useState(true)
+  const [
+    interview,
+    setInterview
+  ] = useState<
+    InterviewResult | null
+  >(null)
 
-  const [error, setError] =
-    useState('')
+  const [
+    loading,
+    setLoading
+  ] = useState(true)
+
+  const [
+    error,
+    setError
+  ] = useState('')
 
   useEffect(() => {
     const load = async () => {
@@ -490,7 +1204,9 @@ export function Report() {
         setError(
           'Student information is not available.'
         )
+
         setLoading(false)
+
         return
       }
 
@@ -504,24 +1220,32 @@ export function Report() {
           const student =
             JSON.parse(stored)
 
-          if (student?.name) {
-            setStudentName(
-              student.name
-            )
-          }
+          setStudentName(
+            student?.name ||
+              student?.student_name ||
+              'Student'
+          )
         } catch {
-          // Ignore invalid local profile data.
+          setStudentName(
+            'Student'
+          )
         }
       }
 
       try {
-        const response =
-          await api.getLatestResume(
+        const currentAnalysis =
+          await loadLatestAnalysis(
             studentId
           )
 
         setAnalysis(
-          response as Analysis
+          currentAnalysis
+        )
+
+        setInterview(
+          findInterviewResult(
+            studentId
+          )
         )
       } catch (err) {
         setError(
@@ -540,47 +1264,33 @@ export function Report() {
   const reportMetrics =
     useMemo(() => {
       const domains =
-        analysis?.career_analysis
-          ?.recommended_domains ?? []
+        analysis
+          ?.career_analysis
+          ?.recommended_domains ??
+        []
 
       const jobs =
-        analysis?.job_analysis
-          ?.job_matches ?? []
-
-      const totalRequired =
-        Number(
-          analysis?.skill_gap_analysis
-            ?.total_required_skills ?? 0
-        )
-
-      const missing =
-        Number(
-          analysis?.skill_gap_analysis
-            ?.missing_skills_count ?? 0
-        )
-
-      const skillCoverage =
-        totalRequired > 0
-          ? clamp(
-              ((totalRequired -
-                missing) /
-                totalRequired) *
-                100
-            )
-          : 0
+        analysis
+          ?.job_analysis
+          ?.job_matches ??
+        []
 
       const career =
         domains.length > 0
           ? clamp(
               domains.reduce(
-                (sum, item) =>
+                (
+                  sum,
+                  item
+                ) =>
                   sum +
                   Number(
-                    item.match_percentage ||
+                    item.match_percentage ??
                       0
                   ),
                 0
-              ) / domains.length
+              ) /
+                domains.length
             )
           : 0
 
@@ -588,23 +1298,43 @@ export function Report() {
         jobs.length > 0
           ? clamp(
               jobs.reduce(
-                (sum, item) =>
+                (
+                  sum,
+                  item
+                ) =>
                   sum +
                   Number(
-                    item.match_percentage ||
+                    item.match_percentage ??
                       0
                   ),
                 0
-              ) / jobs.length
+              ) /
+                jobs.length
             )
           : 0
+
+      const skillCoverage =
+        calculateSkillCoverage(
+          analysis
+            ?.skill_gap_analysis,
+          jobs
+        )
+
+      const interviewScore =
+        clamp(
+          Number(
+            interview?.overall_score ??
+              0
+          )
+        )
 
       return [
         [
           'Resume',
           clamp(
             Number(
-              analysis?.resume_score ?? 0
+              analysis?.resume_score ??
+                0
             )
           )
         ],
@@ -619,31 +1349,48 @@ export function Report() {
         [
           'Skill Coverage',
           skillCoverage
+        ],
+        [
+          'Interview Readiness',
+          interviewScore
         ]
       ] as const
-    }, [analysis])
+    }, [
+      analysis,
+      interview
+    ])
 
   const targetRole =
-    analysis?.skill_gap_analysis
+    analysis
+      ?.skill_gap_analysis
       ?.target_role ||
-    analysis?.job_analysis
-      ?.job_matches?.[0]?.role ||
+    analysis
+      ?.job_analysis
+      ?.job_matches?.[0]
+      ?.role ||
     'Not yet determined by AI'
 
   const targetDomain =
-    analysis?.skill_gap_analysis
+    analysis
+      ?.skill_gap_analysis
       ?.target_domain ||
-    analysis?.job_analysis
-      ?.job_matches?.[0]?.domain ||
+    analysis
+      ?.job_analysis
+      ?.job_matches?.[0]
+      ?.domain ||
     'Not yet determined by AI'
 
   const gaps =
-    analysis?.skill_gap_analysis
-      ?.skill_gaps ?? []
+    analysis
+      ?.skill_gap_analysis
+      ?.skill_gaps ??
+    []
 
   const topJobs =
-    analysis?.job_analysis
-      ?.job_matches ?? []
+    analysis
+      ?.job_analysis
+      ?.job_matches ??
+    []
 
   if (loading) {
     return (
@@ -706,19 +1453,25 @@ export function Report() {
         </p>
 
         <p>
-          This report reflects the latest AI
-          analysis of your resume, career
-          alignment, job matches, and skill
-          coverage.
+          This report reflects
+          the latest AI analysis
+          of your resume, career
+          alignment, job matches,
+          skill coverage, and
+          interview preparation.
         </p>
       </Card>
 
       <div className="card-grid">
         {reportMetrics.map(
           ([label, value]) => (
-            <Card key={label}>
+            <Card
+              key={label}
+            >
               <div className="section-title">
-                <h3>{label}</h3>
+                <h3>
+                  {label}
+                </h3>
 
                 <b>
                   {value}%
@@ -733,6 +1486,80 @@ export function Report() {
         )}
       </div>
 
+      {interview && (
+        <Card>
+          <h2>
+            Interview Evaluation
+          </h2>
+
+          <div className="card-grid">
+            <div>
+              <strong>
+                Overall
+              </strong>
+
+              <p>
+                {clamp(
+                  Number(
+                    interview.overall_score ??
+                      0
+                  )
+                )}
+                %
+              </p>
+            </div>
+
+            <div>
+              <strong>
+                Technical
+              </strong>
+
+              <p>
+                {clamp(
+                  Number(
+                    interview.technical_score ??
+                      0
+                  )
+                )}
+                %
+              </p>
+            </div>
+
+            <div>
+              <strong>
+                Relevance
+              </strong>
+
+              <p>
+                {clamp(
+                  Number(
+                    interview.relevance_score ??
+                      0
+                  )
+                )}
+                %
+              </p>
+            </div>
+
+            <div>
+              <strong>
+                Communication
+              </strong>
+
+              <p>
+                {clamp(
+                  Number(
+                    interview.communication_score ??
+                      0
+                  )
+                )}
+                %
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
+
       <div className="two-col">
         <Card>
           <h2>
@@ -742,7 +1569,10 @@ export function Report() {
           {gaps.length > 0 ? (
             <ul>
               {gaps.map(
-                (gap, index) => (
+                (
+                  gap,
+                  index
+                ) => (
                   <li
                     key={`${gap.skill}-${index}`}
                   >
@@ -753,14 +1583,19 @@ export function Report() {
                     {gap.priority
                       ? ` — ${gap.priority} priority`
                       : ''}
+
+                    {gap.status
+                      ? ` · ${gap.status}`
+                      : ''}
                   </li>
                 )
               )}
             </ul>
           ) : (
             <p>
-              No unresolved skill gaps were
-              identified by the AI.
+              No unresolved skill
+              gaps were identified
+              by the AI.
             </p>
           )}
         </Card>
@@ -775,7 +1610,10 @@ export function Report() {
               {topJobs
                 .slice(0, 5)
                 .map(
-                  (job, index) => (
+                  (
+                    job,
+                    index
+                  ) => (
                     <li
                       key={`${job.role}-${index}`}
                     >
@@ -789,7 +1627,7 @@ export function Report() {
 
                       {` (${clamp(
                         Number(
-                          job.match_percentage ||
+                          job.match_percentage ??
                             0
                         )
                       )}% match)`}
@@ -799,12 +1637,50 @@ export function Report() {
             </ul>
           ) : (
             <p>
-              No job matches are available
-              yet.
+              No job matches are
+              available yet.
             </p>
           )}
         </Card>
       </div>
+
+      <Card>
+        <h2>
+          Placement Preparation Status
+        </h2>
+
+        <p>
+          Your current preparation
+          data has been generated
+          from the AI pipeline using
+          your resume, career
+          direction, job matches,
+          skill gaps, roadmap and
+          interview evaluation.
+        </p>
+
+        {interview ? (
+          <p>
+            <strong>
+              Interview evaluation:
+            </strong>{' '}
+
+            {clamp(
+              Number(
+                interview.overall_score ??
+                  0
+              )
+            )}
+            % overall.
+          </p>
+        ) : (
+          <p>
+            Complete a mock interview
+            to add interview readiness
+            to this report.
+          </p>
+        )}
+      </Card>
     </>
   )
 }
@@ -814,51 +1690,53 @@ export function Report() {
    ========================================================= */
 
 export function Settings() {
-  const [notifications, setNotifications] =
-    useState(
-      localStorage.getItem(
-        'prepmate_notifications'
-      ) !== 'disabled'
-    )
+  const [
+    notifications,
+    setNotifications
+  ] = useState(
+    localStorage.getItem(
+      'prepmate_notifications'
+    ) !== 'disabled'
+  )
 
-  const [appearance, setAppearance] =
-    useState(
-      localStorage.getItem(
-        'prepmate_appearance'
-      ) || 'System'
-    )
+  const [
+    appearance,
+    setAppearance
+  ] = useState(
+    localStorage.getItem(
+      'prepmate_appearance'
+    ) || 'System'
+  )
 
-  /* Apply saved appearance when Settings opens */
   useEffect(() => {
     applySavedSettings()
   }, [])
 
-  /* Listen for settings changes from other
-     parts of the application */
   useEffect(() => {
-    const handleSettingsChange = () => {
-      const savedNotifications =
-        localStorage.getItem(
-          'prepmate_notifications'
-        ) !== 'disabled'
+    const handleSettingsChange =
+      () => {
+        const savedNotifications =
+          localStorage.getItem(
+            'prepmate_notifications'
+          ) !== 'disabled'
 
-      const savedAppearance =
-        localStorage.getItem(
-          'prepmate_appearance'
-        ) || 'System'
+        const savedAppearance =
+          localStorage.getItem(
+            'prepmate_appearance'
+          ) || 'System'
 
-      setNotifications(
-        savedNotifications
-      )
+        setNotifications(
+          savedNotifications
+        )
 
-      setAppearance(
-        savedAppearance
-      )
+        setAppearance(
+          savedAppearance
+        )
 
-      applyAppearance(
-        savedAppearance
-      )
-    }
+        applyAppearance(
+          savedAppearance
+        )
+      }
 
     window.addEventListener(
       'prepmate-settings-changed',
@@ -873,43 +1751,51 @@ export function Settings() {
     }
   }, [])
 
-  const updateNotifications = (
-    value: boolean
-  ) => {
-    setNotifications(value)
-
-    localStorage.setItem(
-      'prepmate_notifications',
-      value
-        ? 'enabled'
-        : 'disabled'
-    )
-
-    window.dispatchEvent(
-      new Event(
-        'prepmate-settings-changed'
+  const updateNotifications =
+    (
+      value: boolean
+    ) => {
+      setNotifications(
+        value
       )
-    )
-  }
 
-  const updateAppearance = (
-    value: string
-  ) => {
-    setAppearance(value)
-
-    localStorage.setItem(
-      'prepmate_appearance',
-      value
-    )
-
-    applyAppearance(value)
-
-    window.dispatchEvent(
-      new Event(
-        'prepmate-settings-changed'
+      localStorage.setItem(
+        'prepmate_notifications',
+        value
+          ? 'enabled'
+          : 'disabled'
       )
-    )
-  }
+
+      window.dispatchEvent(
+        new Event(
+          'prepmate-settings-changed'
+        )
+      )
+    }
+
+  const updateAppearance =
+    (
+      value: string
+    ) => {
+      setAppearance(
+        value
+      )
+
+      localStorage.setItem(
+        'prepmate_appearance',
+        value
+      )
+
+      applyAppearance(
+        value
+      )
+
+      window.dispatchEvent(
+        new Event(
+          'prepmate-settings-changed'
+        )
+      )
+    }
 
   return (
     <>
@@ -953,7 +1839,9 @@ export function Settings() {
           Appearance
 
           <select
-            value={appearance}
+            value={
+              appearance
+            }
             onChange={event =>
               updateAppearance(
                 event.target.value
@@ -975,8 +1863,8 @@ export function Settings() {
         </label>
 
         <p className="notice">
-          Your preferences are saved locally
-          in this browser.
+          Your preferences are saved
+          locally in this browser.
         </p>
       </Card>
     </>

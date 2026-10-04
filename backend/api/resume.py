@@ -188,6 +188,39 @@ async def upload_resume(
                     )
                 ),
 
+                projects=json.dumps(
+                    resume_analysis.get(
+                        "projects",
+                        [],
+                    )
+                ),
+
+                experience=json.dumps(
+                    resume_analysis.get(
+                        "experience",
+                        [],
+                    )
+                ),
+
+                certifications=json.dumps(
+                    resume_analysis.get(
+                        "certifications",
+                        [],
+                    )
+                ),
+
+                achievements=json.dumps(
+                    resume_analysis.get(
+                        "achievements",
+                        [],
+                    )
+                ),
+
+                summary=resume_analysis.get(
+                    "summary",
+                    "",
+                ),
+
                 career_analysis=json.dumps(
                     career_analysis
                 ),
@@ -314,6 +347,28 @@ def get_latest_resume_analysis(
                 [],
             ),
 
+            "projects": load_json(
+                analysis.projects,
+                [],
+            ),
+
+            "experience": load_json(
+                analysis.experience,
+                [],
+            ),
+
+            "certifications": load_json(
+                analysis.certifications,
+                [],
+            ),
+
+            "achievements": load_json(
+                analysis.achievements,
+                [],
+            ),
+
+            "summary": analysis.summary or "",
+
             "career_analysis": load_json(
                 analysis.career_analysis,
                 {},
@@ -366,6 +421,9 @@ def optimize_existing_resume(
                 detail="Resume analysis not found.",
             )
 
+        # =========================
+        # RESUME ANALYSIS
+        # =========================
         resume_analysis = {
             "candidate_email": (
                 analysis.candidate_email
@@ -390,6 +448,28 @@ def optimize_existing_resume(
                 [],
             ),
 
+            "projects": load_json(
+                analysis.projects,
+                [],
+            ),
+
+            "experience": load_json(
+                analysis.experience,
+                [],
+            ),
+
+            "certifications": load_json(
+                analysis.certifications,
+                [],
+            ),
+
+            "achievements": load_json(
+                analysis.achievements,
+                [],
+            ),
+
+            "summary": analysis.summary or "",
+
             "resume_score": (
                 analysis.resume_score or 0
             ),
@@ -399,8 +479,32 @@ def optimize_existing_resume(
             ),
         }
 
+        # =========================
+        # PREVIOUS AI ANALYSES
+        # =========================
+        career_analysis = load_json(
+            analysis.career_analysis,
+            {},
+        )
+
+        job_analysis = load_json(
+            analysis.job_analysis,
+            {},
+        )
+
+        skill_gap_analysis = load_json(
+            analysis.skill_gap_analysis,
+            {},
+        )
+
+        # =========================
+        # RESUME OPTIMIZER AI
+        # =========================
         optimization = optimize_resume(
-            resume_analysis
+            resume_analysis=resume_analysis,
+            career_analysis=career_analysis,
+            job_analysis=job_analysis,
+            skill_gap_analysis=skill_gap_analysis,
         )
 
         return {

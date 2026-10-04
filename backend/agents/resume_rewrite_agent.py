@@ -1,6 +1,10 @@
 from services.ai_service import generate_text
 
 
+# ============================================================
+# HELPERS
+# ============================================================
+
 def _clean_text(text):
     return " ".join(
         str(text or "").strip().split()
@@ -29,13 +33,124 @@ def _normalize_skills(skills):
     return result
 
 
-def _build_improved_summary(
-    summary,
-    skills,
-):
+def _remove_wrapping_quotes(text):
+    text = _clean_text(text)
+
+    if (
+        len(text) >= 2
+        and text[0] == '"'
+        and text[-1] == '"'
+    ):
+        text = text[1:-1].strip()
+
+    return text
+
+
+def _remove_ai_prefix(text):
     """
-    Improve wording locally without introducing
-    information that was not supplied by the student.
+    Remove common accidental prefixes such as:
+    'Here is the rewritten summary:'
+    'Rewritten summary:'
+    'Improved summary:'
+    """
+
+    text = _clean_text(text)
+
+    prefixes = [
+        "Here is the rewritten summary:",
+        "Here is the improved summary:",
+        "Rewritten summary:",
+        "Improved summary:",
+        "Rewritten resume summary:",
+        "Improved resume summary:",
+        "Resume summary:",
+    ]
+
+    changed = True
+
+    while changed:
+        changed = False
+
+        for prefix in prefixes:
+            if text.lower().startswith(prefix.lower()):
+                text = text[len(prefix):].strip()
+                changed = True
+                break
+
+    return text
+
+
+def _has_unsupported_experience_claim(original, improved):
+    """
+    Detect unsupported experience-level claims introduced by the AI.
+
+    If the original summary clearly describes a student/fresher and the
+    rewritten summary introduces a professional-level experience claim,
+    reject the AI output and use the deterministic fallback instead.
+    """
+
+    original_lower = _clean_text(original).lower()
+    improved_lower = _clean_text(improved).lower()
+
+    student_indicators = [
+        "student",
+        "undergraduate",
+        "b.tech",
+        "btech",
+        "b.e.",
+        "bachelor",
+        "college student",
+        "university student",
+        "fresher",
+        "graduate student",
+        "third-year",
+        "third year",
+        "second-year",
+        "second year",
+        "final-year",
+        "final year",
+    ]
+
+    original_is_student = any(
+        phrase in original_lower
+        for phrase in student_indicators
+    )
+
+    if not original_is_student:
+        return False
+
+    unsupported_claims = [
+        "highly experienced",
+        "extensive professional experience",
+        "seasoned professional",
+        "senior professional",
+        "proven track record",
+        "industry expert",
+        "expert professional",
+        "years of experience",
+        "experienced professional",
+    ]
+
+    return any(
+        phrase in improved_lower
+        and phrase not in original_lower
+        for phrase in unsupported_claims
+    ) or (
+        "experienced" in improved_lower
+        and "experienced" not in original_lower
+    )
+
+
+# ============================================================
+# DETERMINISTIC FALLBACK
+# ============================================================
+
+def _build_improved_summary(summary, skills):
+    """
+    Deterministic fallback.
+
+    Improves structure and wording without introducing
+    unsupported facts.
     """
 
     summary = _clean_text(summary)
@@ -44,45 +159,27 @@ def _build_improved_summary(
     if not summary:
         return ""
 
-    # --------------------------------------------------
-    # Split summary into sentences
-    # --------------------------------------------------
-
     sentences = [
         sentence.strip()
-        for sentence in summary.replace(
-            "\n",
-            " ",
-        ).split(".")
+        for sentence in summary.replace("\n", " ").split(".")
         if sentence.strip()
     ]
 
     cleaned_sentences = []
 
     for sentence in sentences:
-
-        sentence = _clean_text(
-            sentence
-        )
+        sentence = _clean_text(sentence)
 
         if not sentence:
             continue
 
         if sentence not in cleaned_sentences:
-            cleaned_sentences.append(
-                sentence
-            )
+            cleaned_sentences.append(sentence)
 
-    improved = ". ".join(
-        cleaned_sentences
-    )
+    improved = ". ".join(cleaned_sentences)
 
     if improved and not improved.endswith("."):
         improved += "."
-
-    # --------------------------------------------------
-    # Add supplied skills only when not already mentioned
-    # --------------------------------------------------
 
     summary_lower = improved.lower()
 
@@ -93,46 +190,35 @@ def _build_improved_summary(
     ]
 
     if additional_skills:
-
         improved += (
             " Technical skills include "
-            + ", ".join(
-                additional_skills
-            )
+            + ", ".join(additional_skills)
             + "."
         )
 
     return improved
 
 
-def rewrite_summary(
-    summary: str,
-    skills: list[str],
-):
+# ============================================================
+# MAIN SUMMARY REWRITER
+# ============================================================
+
+def rewrite_summary(summary: str, skills: list[str]):
     """
-    Rewrite a student's resume summary.
+    Rewrite a student's or professional candidate's resume summary.
 
     Primary:
         Local Ollama LLM.
 
     Fallback:
-        Local deterministic rewriting.
+        Deterministic rewriting.
 
-    The AI is instructed to preserve only information
-    actually supplied by the student.
+    The AI must preserve the candidate's actual career level,
+    experience and facts.
     """
 
-    summary = _clean_text(
-        summary
-    )
-
-    skills = _normalize_skills(
-        skills
-    )
-
-    # --------------------------------------------------
-    # Empty input
-    # --------------------------------------------------
+    summary = _clean_text(summary)
+    skills = _normalize_skills(skills)
 
     if not summary:
         return {
@@ -140,98 +226,74 @@ def rewrite_summary(
             "improved": "",
         }
 
-    # --------------------------------------------------
-    # PRIMARY AI PATH
-    # --------------------------------------------------
-
     ai = generate_text(
         f"""
-Rewrite the following resume summary for a
-college student or entry-level candidate.
+Rewrite the following resume summary professionally.
 
-The goal is to make it:
+The candidate's original summary is the source of truth.
 
-- Professional
-- Clear
-- Concise
-- Placement-friendly
-- Grammatically polished
+Your job is ONLY to improve:
+- wording
+- grammar
+- clarity
+- structure
+- conciseness
+- professional tone
 
-IMPORTANT RULES:
+IMPORTANT FACT-PRESERVATION RULES:
 
-1. Preserve only facts explicitly present in the
-   original summary.
+1. Preserve the candidate's actual career level.
+2. If the candidate is a student/fresher, keep them a student/fresher.
+3. If the candidate is a professional, preserve their professional level.
+4. Never downgrade or upgrade the candidate's experience level.
+5. Never invent years of experience.
+6. Never invent employers.
+7. Never invent projects.
+8. Never invent certifications.
+9. Never invent achievements.
+10. Never invent metrics or percentages.
+11. Never invent technologies or tools that are not supplied.
+12. You may use the supplied skills when they genuinely fit the original summary.
+13. Do not turn a skill into an achievement.
+14. Do not claim professional experience that is not supported.
+15. Do not add phrases such as "highly experienced", "proven track record", "expert",
+    "seasoned", or "years of experience" unless the original information clearly supports them.
+16. Do not change the meaning of the original summary.
+17. Do not add information simply because it sounds good.
+18. Keep the summary concise and suitable for a resume.
+19. Return ONLY the rewritten summary.
+20. Do NOT write a heading or explanation.
+21. Do NOT use quotation marks around the answer.
 
-2. You may use the supplied skills.
-
-3. Do NOT invent years of experience.
-
-4. Do NOT invent employers.
-
-5. Do NOT invent projects.
-
-6. Do NOT invent certifications.
-
-7. Do NOT invent achievements.
-
-8. Do NOT invent metrics or percentages.
-
-9. Do NOT invent technologies that are not supplied.
-
-10. Do NOT claim professional experience if it is not
-    present in the original summary.
-
-11. Do not add generic claims such as "highly experienced"
-    unless supported by the supplied information.
-
-12. Keep the summary concise.
-
-13. Return ONLY the rewritten summary.
-    Do not include headings, explanations or quotation marks.
-
-Original summary:
+ORIGINAL SUMMARY:
 {summary}
 
-Known skills:
+KNOWN SKILLS:
 {skills}
 """,
         system=(
-            "You are a careful resume-writing AI. "
-            "Improve wording without fabricating facts. "
-            "Preserve the candidate's actual information. "
-            "Return only the improved resume summary."
+            "You are a strict evidence-based resume rewriting AI. "
+            "Improve wording only. Preserve the candidate's actual career level, "
+            "experience and facts. Never downgrade a professional to a student and "
+            "never upgrade a student to an experienced professional. Never invent "
+            "qualifications, employers, projects, achievements, metrics or experience. "
+            "Return only the rewritten summary with no heading or explanation."
         ),
     )
 
-    # --------------------------------------------------
-    # Validate AI response
-    # --------------------------------------------------
-
     if ai:
+        improved = _clean_text(ai)
+        improved = _remove_wrapping_quotes(improved)
+        improved = _remove_ai_prefix(improved)
 
-        improved = _clean_text(
-            ai
-        )
-
-        # Remove accidental quotation marks
-        # surrounding the complete response.
-        if (
-            len(improved) >= 2
-            and improved[0] == '"'
-            and improved[-1] == '"'
+        if improved and not _has_unsupported_experience_claim(
+            original=summary,
+            improved=improved,
         ):
-            improved = improved[1:-1].strip()
-
-        if improved:
-
             return {
                 "original": summary,
                 "improved": improved,
             }
-
-    # --------------------------------------------------
-    # FALLBACK
-    # --------------------------------------------------
 
     improved = _build_improved_summary(
         summary=summary,

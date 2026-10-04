@@ -1,6 +1,10 @@
 from services.ai_service import generate_json
 
 
+# ============================================================
+# HELPERS
+# ============================================================
+
 def _normalize_list(value):
     if not isinstance(value, list):
         return []
@@ -9,6 +13,9 @@ def _normalize_list(value):
     seen = set()
 
     for item in value:
+        if isinstance(item, dict):
+            item = str(item)
+
         item = str(item).strip()
 
         if not item:
@@ -27,7 +34,10 @@ def _safe_score(value):
     try:
         return max(
             0,
-            min(100, round(float(value))),
+            min(
+                100,
+                round(float(value)),
+            ),
         )
     except (TypeError, ValueError):
         return 0
@@ -45,16 +55,92 @@ def _has_section(sections, *names):
     )
 
 
+def _clean_value(value):
+    if value is None:
+        return ""
+
+    return str(value).strip()
+
+
+def _extract_missing_skills(skill_gap_analysis):
+    """
+    Extract missing skills from different possible
+    Skill Gap Agent response formats.
+    """
+
+    if not isinstance(skill_gap_analysis, dict):
+        return []
+
+    missing_skills = []
+
+    possible_keys = [
+        "missing_skills",
+        "gaps",
+        "skill_gaps",
+        "missing",
+    ]
+
+    for key in possible_keys:
+        value = skill_gap_analysis.get(key, [])
+
+        if not isinstance(value, list):
+            continue
+
+        for item in value:
+            if isinstance(item, dict):
+                skill = (
+                    item.get("skill")
+                    or item.get("name")
+                    or ""
+                )
+
+                if skill:
+                    missing_skills.append(
+                        str(skill)
+                    )
+
+            elif item:
+                missing_skills.append(
+                    str(item)
+                )
+
+    return _normalize_list(missing_skills)
+
+
+# ============================================================
+# DETERMINISTIC FALLBACK
+# ============================================================
+
 def _optimize_resume(
     resume_analysis: dict,
+    career_analysis: dict | None = None,
+    job_analysis: dict | None = None,
+    skill_gap_analysis: dict | None = None,
 ):
     """
-    Generate resume improvement suggestions locally
-    from information actually detected in the resume.
+    Deterministic fallback.
 
-    This is the fallback used when the local AI model
-    is unavailable.
+    This is used only when the local AI model does not
+    return a valid response.
     """
+
+    career_analysis = (
+        career_analysis
+        if isinstance(career_analysis, dict)
+        else {}
+    )
+
+    job_analysis = (
+        job_analysis
+        if isinstance(job_analysis, dict)
+        else {}
+    )
+
+    skill_gap_analysis = (
+        skill_gap_analysis
+        if isinstance(skill_gap_analysis, dict)
+        else {}
+    )
 
     score = _safe_score(
         resume_analysis.get(
@@ -99,9 +185,9 @@ def _optimize_resume(
     suggestions = []
     warnings = []
 
-    # --------------------------------------------------
-    # Contact information
-    # --------------------------------------------------
+    # --------------------------------------------------------
+    # CONTACT INFORMATION
+    # --------------------------------------------------------
 
     if not candidate_email:
         warnings.append(
@@ -109,8 +195,7 @@ def _optimize_resume(
         )
 
         suggestions.append(
-            "Add a professional email address to the "
-            "resume header."
+            "Add a professional email address to the resume header."
         )
 
     if not candidate_phone:
@@ -119,13 +204,12 @@ def _optimize_resume(
         )
 
         suggestions.append(
-            "Add a reachable phone number to the resume "
-            "contact section."
+            "Add a reachable phone number to the resume contact section."
         )
 
-    # --------------------------------------------------
-    # Education
-    # --------------------------------------------------
+    # --------------------------------------------------------
+    # EDUCATION
+    # --------------------------------------------------------
 
     if not education:
         warnings.append(
@@ -133,72 +217,45 @@ def _optimize_resume(
         )
 
         suggestions.append(
-            "Add your current degree, institution, branch "
-            "or specialization, and relevant academic details."
+            "Add your relevant education details, including degree and institution."
         )
 
-    # --------------------------------------------------
-    # Skills
-    # --------------------------------------------------
+    # --------------------------------------------------------
+    # SKILLS
+    # --------------------------------------------------------
 
     if not skills:
         warnings.append(
-            "No technical or professional skills were "
-            "detected from the resume."
+            "No technical skills were detected."
         )
 
         suggestions.append(
-            "Add a clearly labeled Skills section containing "
-            "technologies you actually know."
+            "Add the technical skills that you can genuinely demonstrate."
         )
 
-    elif not _has_section(
-        sections,
-        "Skills",
-    ):
-        suggestions.append(
-            "Use a clearly labeled Skills section so your "
-            "technical abilities are easy to identify."
-        )
-
-    # --------------------------------------------------
-    # Projects
-    # --------------------------------------------------
+    # --------------------------------------------------------
+    # RESUME SECTIONS
+    # --------------------------------------------------------
 
     if not _has_section(
         sections,
         "Projects",
+        "Project",
     ):
-        warnings.append(
-            "A Projects section was not detected."
-        )
-
         suggestions.append(
-            "Add relevant academic or personal projects "
-            "with technologies used and your actual contribution."
+            "Add a Projects section containing relevant academic, personal or verified projects."
         )
 
-    # --------------------------------------------------
-    # Experience / internships
-    # --------------------------------------------------
-
-    has_experience = _has_section(
+    if not _has_section(
         sections,
         "Experience",
         "Internships",
         "Internship",
-    )
-
-    if not has_experience:
+        "Work Experience",
+    ):
         suggestions.append(
-            "If you have completed internships, training or "
-            "relevant practical work, present them in a clear "
-            "Experience or Internship section."
+            "If you have verified internship or work experience, present it in a clearly labeled Experience section."
         )
-
-    # --------------------------------------------------
-    # Certifications
-    # --------------------------------------------------
 
     if not _has_section(
         sections,
@@ -206,13 +263,8 @@ def _optimize_resume(
         "Certificates",
     ):
         suggestions.append(
-            "If you have relevant certifications, include a "
-            "separate Certifications section."
+            "Add relevant certifications only when you have actually completed them."
         )
-
-    # --------------------------------------------------
-    # Summary / objective
-    # --------------------------------------------------
 
     if not _has_section(
         sections,
@@ -221,120 +273,172 @@ def _optimize_resume(
         "Profile",
     ):
         suggestions.append(
-            "Consider adding a concise professional summary "
-            "that reflects your actual skills and placement "
-            "direction."
+            "Consider adding a concise professional summary aligned with your target role."
         )
 
-    # --------------------------------------------------
-    # Achievements
-    # --------------------------------------------------
+    # --------------------------------------------------------
+    # CAREER DOMAIN
+    # --------------------------------------------------------
 
-    if not _has_section(
-        sections,
-        "Achievements",
+    recommended_domains = career_analysis.get(
+        "recommended_domains",
+        [],
+    )
+
+    domain_names = []
+
+    if isinstance(
+        recommended_domains,
+        list,
     ):
+        for item in recommended_domains[:3]:
+            if isinstance(item, dict):
+                domain = (
+                    item.get("domain")
+                    or item.get("name")
+                    or ""
+                )
+
+                if domain:
+                    domain_names.append(
+                        str(domain)
+                    )
+
+    if domain_names:
         suggestions.append(
-            "Include relevant academic, hackathon or other "
-            "verifiable achievements if you have them."
+            "Align the resume summary, projects and skills presentation with the strongest recommended career domains: "
+            + ", ".join(domain_names)
+            + "."
         )
 
-    # --------------------------------------------------
-    # Resume score
-    # --------------------------------------------------
+    # --------------------------------------------------------
+    # JOB ROLE
+    # --------------------------------------------------------
+
+    job_matches = job_analysis.get(
+        "job_matches",
+        [],
+    )
+
+    role_names = []
+
+    if isinstance(
+        job_matches,
+        list,
+    ):
+        for job in job_matches[:3]:
+            if isinstance(job, dict):
+                role = (
+                    job.get("role")
+                    or job.get("title")
+                    or ""
+                )
+
+                if role:
+                    role_names.append(
+                        str(role)
+                    )
+
+    if role_names:
+        suggestions.append(
+            "Prioritize resume evidence that is relevant to realistic target roles such as: "
+            + ", ".join(role_names)
+            + "."
+        )
+
+    # --------------------------------------------------------
+    # SKILL GAPS
+    # --------------------------------------------------------
+
+    missing_skills = _extract_missing_skills(
+        skill_gap_analysis
+    )
+
+    if missing_skills:
+        suggestions.append(
+            "Where truthful and supported by your actual learning or experience, strengthen evidence for relevant skill gaps identified by the Skill Gap Agent: "
+            + ", ".join(missing_skills[:8])
+            + ". Do not claim skills you have not learned."
+        )
+
+    # --------------------------------------------------------
+    # SCORE-BASED SUGGESTIONS
+    # --------------------------------------------------------
 
     if score < 50:
-
-        warnings.append(
-            "The detected resume information indicates that "
-            "several important resume elements may need "
-            "improvement."
-        )
-
         suggestions.append(
-            "Improve completeness, structure and evidence of "
-            "technical work before using the resume for placements."
+            "Improve completeness, structure and evidence of technical work before using the resume for placements."
         )
 
     elif score < 70:
-
         suggestions.append(
-            "Strengthen the resume by improving project evidence, "
-            "technical detail and clarity of the existing sections."
+            "Strengthen the resume by improving project evidence, technical detail and clarity of the existing sections."
         )
 
     elif score < 85:
-
         suggestions.append(
-            "Refine project descriptions and existing achievements "
-            "with concise, specific evidence where available."
+            "Refine project descriptions and existing achievements with concise, specific evidence where available."
         )
 
     else:
-
         suggestions.append(
-            "Keep the resume concise and continue updating it with "
-            "new verified projects, skills and achievements."
+            "Keep the resume concise and continue updating it with new verified projects, skills and achievements."
         )
 
-    # --------------------------------------------------
-    # General quality suggestions
-    # --------------------------------------------------
+    # --------------------------------------------------------
+    # GENERAL QUALITY
+    # --------------------------------------------------------
 
     suggestions.append(
-        "Use consistent formatting, section headings and "
-        "bullet-point structure throughout the resume."
+        "Use consistent formatting, section headings and bullet-point structure throughout the resume."
     )
 
     suggestions.append(
-        "Describe only skills, projects, experience and "
-        "achievements that you can genuinely demonstrate."
-    )
-
-    # --------------------------------------------------
-    # Remove duplicates
-    # --------------------------------------------------
-
-    suggestions = _normalize_list(
-        suggestions
-    )
-
-    warnings = _normalize_list(
-        warnings
+        "Describe only skills, projects, experience and achievements that you can genuinely demonstrate."
     )
 
     return {
         "resume_score": score,
-        "suggestions": suggestions,
-        "warnings": warnings,
+        "suggestions": _normalize_list(
+            suggestions
+        ),
+        "warnings": _normalize_list(
+            warnings
+        ),
         "detected_skills": skills,
         "detected_sections": sections,
     }
 
 
-def _clean_value(value):
-    if value is None:
-        return ""
-
-    return str(value).strip()
-
+# ============================================================
+# MAIN RESUME OPTIMIZER
+# ============================================================
 
 def optimize_resume(
     resume_analysis: dict,
+    career_analysis: dict | None = None,
+    job_analysis: dict | None = None,
+    skill_gap_analysis: dict | None = None,
 ):
     """
     Optimize a resume using the local AI model.
+
+    AI receives:
+        1. Resume analysis
+        2. Career-domain analysis
+        3. Job-matching analysis
+        4. Skill-gap analysis
 
     Primary:
         Ollama / local LLM
 
     Fallback:
-        Rule-based resume optimization
+        Deterministic resume optimization
     """
 
-    # --------------------------------------------------
-    # Validate input
-    # --------------------------------------------------
+    # --------------------------------------------------------
+    # VALIDATE INPUT
+    # --------------------------------------------------------
 
     if not isinstance(
         resume_analysis,
@@ -344,9 +448,27 @@ def optimize_resume(
             "resume_analysis must be a dictionary."
         )
 
-    # --------------------------------------------------
-    # Extract useful candidate information
-    # --------------------------------------------------
+    if not isinstance(
+        career_analysis,
+        dict,
+    ):
+        career_analysis = {}
+
+    if not isinstance(
+        job_analysis,
+        dict,
+    ):
+        job_analysis = {}
+
+    if not isinstance(
+        skill_gap_analysis,
+        dict,
+    ):
+        skill_gap_analysis = {}
+
+    # --------------------------------------------------------
+    # RESUME INFORMATION
+    # --------------------------------------------------------
 
     current_score = _safe_score(
         resume_analysis.get(
@@ -404,117 +526,255 @@ def optimize_resume(
         )
     )
 
-    # --------------------------------------------------
-    # PRIMARY AI PATH
-    # --------------------------------------------------
+    # --------------------------------------------------------
+    # CAREER INFORMATION
+    # --------------------------------------------------------
+
+    recommended_domains = (
+        career_analysis.get(
+            "recommended_domains",
+            [],
+        )
+    )
+
+    # --------------------------------------------------------
+    # JOB INFORMATION
+    # --------------------------------------------------------
+
+    job_matches = (
+        job_analysis.get(
+            "job_matches",
+            [],
+        )
+    )
+
+    # --------------------------------------------------------
+    # SKILL GAP INFORMATION
+    # --------------------------------------------------------
+
+    missing_skills = _extract_missing_skills(
+        skill_gap_analysis
+    )
+
+    # --------------------------------------------------------
+    # TARGET ROLE
+    # --------------------------------------------------------
+
+    target_role = (
+        skill_gap_analysis.get(
+            "target_role"
+        )
+        or ""
+    )
+
+    target_domain = (
+        skill_gap_analysis.get(
+            "target_domain"
+        )
+        or ""
+    )
+
+    # --------------------------------------------------------
+    # LOCAL AI
+    # --------------------------------------------------------
 
     ai = generate_json(
         f"""
 You are the Resume Optimization Agent in PrepMate AI.
 
-Analyze this candidate's resume information and provide
-honest, personalized resume improvement advice.
+Your task is to analyze the candidate's actual resume together
+with the output of the Career, Job Matching and Skill Gap agents.
 
-The goal is to help the candidate improve the resume for
-student placements and entry-level technology roles.
+Your goal is to provide personalized resume improvement advice
+for the candidate's actual career direction.
+
+Do NOT give generic advice when the supplied information allows
+you to be specific.
 
 IMPORTANT RULES:
 
 1. Use only information actually present in the supplied
-   resume analysis.
+   candidate data and previous agent analyses.
 
-2. Never invent skills, projects, internships,
-   certifications, achievements or experience.
+2. Never invent skills, projects, internships, certifications,
+   achievements, education or experience.
 
-3. Do not tell the candidate to claim something they have
-   not actually done.
+3. Never tell the candidate to claim something they have not
+   actually done.
 
-4. Suggestions must be actionable and specific.
+4. Career domains, target roles and skill gaps are guidance
+   for resume positioning. They are NOT proof that the
+   candidate possesses those skills.
 
-5. Distinguish between detected problems and optional
-   improvements.
+5. If a skill appears as a missing skill, do NOT list it as
+   an existing candidate skill.
 
-6. If a section is missing, suggest adding it only when
-   relevant.
+6. Suggestions must explain how the candidate can improve the
+   resume using evidence they already have.
 
-7. Do not automatically assume that every candidate needs
-   every possible resume section.
+7. If recommending a missing skill, clearly phrase it as
+   something to learn or demonstrate later, not something
+   to falsely add to the resume.
 
-8. Preserve the candidate's actual information.
+8. Use the candidate's actual target roles when suggesting
+   resume improvements.
 
-9. Do not fabricate a new resume score without considering
-   the supplied resume evidence.
+9. Do not invent job titles, achievements or metrics.
 
-10. Detected skills and sections should reflect the supplied
-    resume analysis.
+10. Do not fabricate experience.
 
-11. Avoid duplicate suggestions.
+11. Do not automatically recommend every possible resume
+    section.
 
-12. Return ONLY valid JSON.
+12. Distinguish between:
+    - detected information
+    - recommended improvements
+    - missing skills
 
-Current resume score:
+13. Keep suggestions practical for student placements and
+    entry-level roles unless the supplied evidence clearly
+    indicates otherwise.
+
+14. Do not simply repeat the Career, Job or Skill Gap analysis.
+    Convert those results into useful resume improvement actions.
+
+15. Avoid duplicate suggestions.
+
+16. Return ONLY valid JSON.
+
+------------------------------------------------------------
+TARGET CAREER DIRECTION
+------------------------------------------------------------
+
+Target role:
+{target_role}
+
+Target domain:
+{target_domain}
+
+------------------------------------------------------------
+CURRENT RESUME SCORE
+------------------------------------------------------------
+
 {current_score}
 
-Detected skills:
+------------------------------------------------------------
+DETECTED RESUME SKILLS
+------------------------------------------------------------
+
 {current_skills}
 
-Detected education:
+------------------------------------------------------------
+DETECTED EDUCATION
+------------------------------------------------------------
+
 {current_education}
 
-Detected sections:
+------------------------------------------------------------
+DETECTED RESUME SECTIONS
+------------------------------------------------------------
+
 {current_sections}
 
-Detected projects:
+------------------------------------------------------------
+DETECTED PROJECTS
+------------------------------------------------------------
+
 {projects}
 
-Detected experience:
+------------------------------------------------------------
+DETECTED EXPERIENCE
+------------------------------------------------------------
+
 {experience}
 
-Detected certifications:
+------------------------------------------------------------
+DETECTED CERTIFICATIONS
+------------------------------------------------------------
+
 {certifications}
 
-Detected achievements:
+------------------------------------------------------------
+DETECTED ACHIEVEMENTS
+------------------------------------------------------------
+
 {achievements}
 
-Complete resume analysis:
+------------------------------------------------------------
+CAREER DOMAIN ANALYSIS
+------------------------------------------------------------
+
+{career_analysis}
+
+Recommended career domains:
+{recommended_domains}
+
+------------------------------------------------------------
+JOB MATCHING ANALYSIS
+------------------------------------------------------------
+
+{job_analysis}
+
+Matched job roles:
+{job_matches}
+
+------------------------------------------------------------
+SKILL GAP ANALYSIS
+------------------------------------------------------------
+
+{skill_gap_analysis}
+
+Missing skills:
+{missing_skills}
+
+------------------------------------------------------------
+COMPLETE RESUME ANALYSIS
+------------------------------------------------------------
+
 {resume_analysis}
 
-Return exactly:
+------------------------------------------------------------
+RETURN EXACTLY THIS JSON STRUCTURE
+------------------------------------------------------------
 
 {{
     "resume_score": 0,
     "suggestions": [
-        "Specific improvement suggestion"
+        "Specific personalized resume improvement"
     ],
     "warnings": [
-        "Important issue detected"
+        "Important resume issue"
     ],
     "detected_skills": [
-        "Skill"
+        "Skill actually detected in the resume"
     ],
     "detected_sections": [
-        "Section"
+        "Section actually detected in the resume"
     ]
 }}
 """,
         system=(
-            "You are a careful resume optimization AI. "
-            "Give honest, evidence-based advice using only "
-            "the supplied candidate information. "
-            "Never invent candidate experience. "
+            "You are a careful Resume Optimization AI "
+            "for PrepMate AI. "
+            "Give honest, evidence-based and personalized "
+            "resume advice. "
+            "Use the supplied resume, career analysis, "
+            "job analysis and skill-gap analysis. "
+            "Never invent candidate qualifications, "
+            "experience, projects, metrics or achievements. "
+            "Never turn missing skills into existing skills. "
             "Return only valid JSON."
         ),
     )
 
-    # --------------------------------------------------
+    # --------------------------------------------------------
     # VALIDATE AI RESPONSE
-    # --------------------------------------------------
+    # --------------------------------------------------------
 
     if isinstance(
         ai,
         dict,
     ):
-
         suggestions = _normalize_list(
             ai.get(
                 "suggestions",
@@ -530,7 +790,6 @@ Return exactly:
         )
 
         if suggestions:
-
             ai_score = _safe_score(
                 ai.get(
                     "resume_score",
@@ -568,10 +827,13 @@ Return exactly:
                 ),
             }
 
-    # --------------------------------------------------
+    # --------------------------------------------------------
     # FALLBACK
-    # --------------------------------------------------
+    # --------------------------------------------------------
 
     return _optimize_resume(
-        resume_analysis
+        resume_analysis=resume_analysis,
+        career_analysis=career_analysis,
+        job_analysis=job_analysis,
+        skill_gap_analysis=skill_gap_analysis,
     )

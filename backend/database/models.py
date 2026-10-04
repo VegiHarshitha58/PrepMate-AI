@@ -4,7 +4,6 @@ from database.connection import engine
 
 Base = declarative_base()
 
-
 class Student(Base):
     __tablename__ = "students"
 
@@ -16,6 +15,13 @@ class Student(Base):
     cgpa = Column(String(20))
     password_hash = Column(String(255), nullable=False)
 
+    # Extended profile information
+    phone = Column(String(30))
+    location = Column(String(200))
+    degree = Column(String(100))
+    skills = Column(Text)
+    soft_skills = Column(Text)
+    interests = Column(Text)
 
 class ResumeAnalysis(Base):
     __tablename__ = "resume_analyses"
@@ -30,6 +36,11 @@ class ResumeAnalysis(Base):
     skills = Column(Text)
     education = Column(Text)
     detected_sections = Column(Text)
+    projects = Column(Text)
+    experience = Column(Text)
+    certifications = Column(Text)
+    achievements = Column(Text)
+    summary = Column(Text)
     career_analysis = Column(Text)
     job_analysis = Column(Text)
     skill_gap_analysis = Column(Text)
@@ -52,17 +63,74 @@ def create_tables():
     # Lightweight PostgreSQL migration for databases created by an older
     # version of PrepMate AI. create_all() does not add new columns.
     with engine.begin() as connection:
+
+        # Student profile columns
+        connection.execute(text(
+            "ALTER TABLE IF EXISTS students "
+            "ADD COLUMN IF NOT EXISTS phone VARCHAR(30)"
+        ))
+
+        connection.execute(text(
+            "ALTER TABLE IF EXISTS students "
+            "ADD COLUMN IF NOT EXISTS location VARCHAR(200)"
+        ))
+
+        connection.execute(text(
+            "ALTER TABLE IF EXISTS students "
+            "ADD COLUMN IF NOT EXISTS degree VARCHAR(100)"
+        ))
+
+        connection.execute(text(
+            "ALTER TABLE IF EXISTS students "
+            "ADD COLUMN IF NOT EXISTS skills TEXT"
+        ))
+
+        connection.execute(text(
+            "ALTER TABLE IF EXISTS students "
+            "ADD COLUMN IF NOT EXISTS soft_skills TEXT"
+        ))
+
+        connection.execute(text(
+            "ALTER TABLE IF EXISTS students "
+            "ADD COLUMN IF NOT EXISTS interests TEXT"
+        ))
+
+        # Resume-analysis migrations
         connection.execute(text(
             "ALTER TABLE IF EXISTS resume_analyses "
             "ADD COLUMN IF NOT EXISTS candidate_email VARCHAR(150)"
         ))
+
         connection.execute(text(
             "ALTER TABLE IF EXISTS resume_analyses "
             "ADD COLUMN IF NOT EXISTS candidate_phone VARCHAR(30)"
         ))
 
+        connection.execute(text(
+            "ALTER TABLE IF EXISTS resume_analyses "
+            "ADD COLUMN IF NOT EXISTS projects TEXT"
+        ))
+
+        connection.execute(text(
+            "ALTER TABLE IF EXISTS resume_analyses "
+            "ADD COLUMN IF NOT EXISTS experience TEXT"
+        ))
+
+        connection.execute(text(
+            "ALTER TABLE IF EXISTS resume_analyses "
+            "ADD COLUMN IF NOT EXISTS certifications TEXT"
+        ))
+
+        connection.execute(text(
+            "ALTER TABLE IF EXISTS resume_analyses "
+            "ADD COLUMN IF NOT EXISTS achievements TEXT"
+        ))
+
+        connection.execute(text(
+            "ALTER TABLE IF EXISTS resume_analyses "
+            "ADD COLUMN IF NOT EXISTS summary TEXT"
+        ))
+
     print("Database tables ready!")
-
-
 if __name__ == "__main__":
     create_tables()

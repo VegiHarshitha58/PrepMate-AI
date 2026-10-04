@@ -89,8 +89,58 @@ export default function Roadmap() {
          */
         let savedProgress: { week: number; done: boolean }[] = []
         try {
-          const progress = await api.getRoadmapProgress(Number(currentStudentId), currentAnalysisId)
-          if (Array.isArray(progress)) savedProgress = progress as { week: number; done: boolean }[]
+          const progress =
+            await api.getRoadmapProgress(
+              Number(currentStudentId),
+              currentAnalysisId
+            )
+
+          let progressItems: unknown[] = []
+
+          if (Array.isArray(progress)) {
+            progressItems = progress
+          } else if (
+            progress &&
+            typeof progress === 'object'
+          ) {
+            const response =
+              progress as Record<string, unknown>
+
+            if (Array.isArray(response.progress)) {
+              progressItems = response.progress
+            } else if (Array.isArray(response.data)) {
+              progressItems = response.data
+            } else if (Array.isArray(response.items)) {
+              progressItems = response.items
+            }
+          }
+
+          savedProgress =
+            progressItems
+              .filter(
+                item =>
+                  item &&
+                  typeof item === 'object'
+              )
+              .map(item => {
+                const value =
+                  item as Record<string, unknown>
+
+                return {
+                  week: Number(
+                    value.week ??
+                      value.week_number ??
+                      0
+                  ),
+                  done:
+                    value.done === true ||
+                    value.done === 1 ||
+                    value.done === 'true'
+                }
+              })
+              .filter(
+                item => item.week > 0
+              )
         } catch {
           savedProgress = []
         }

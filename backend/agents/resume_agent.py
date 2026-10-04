@@ -1,13 +1,5 @@
 import re
-
-import spacy
-
 from services.ai_service import generate_json
-
-
-nlp = spacy.load("en_core_web_sm")
-
-
 SECTION_PATTERNS = {
     "Summary": r"\b(summary|professional summary|profile)\b",
     "Objective": r"\b(objective|career objective)\b",
@@ -337,12 +329,12 @@ def analyze_resume(text: str):
             "word_count": 0,
         }
 
-    doc = nlp(text)
+  
 
     email = extract_email(text)
     phone = extract_phone(text)
 
-    word_count = len(doc)
+    word_count = len(text.split())
 
     sections = _detect_sections(text)
 

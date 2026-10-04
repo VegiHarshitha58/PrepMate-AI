@@ -62,8 +62,7 @@ export default function Interview() {
   const [interviewType, setInterviewType] =
     useState('Mixed')
 
-  const [evaluating, setEvaluating] =
-    useState(false)
+  const [evaluating, setEvaluating] = useState(false)
 
   const [evaluation, setEvaluation] =
     useState<Evaluation | null>(null)
@@ -108,8 +107,17 @@ export default function Interview() {
       const data = await api.generateInterview({
         student_id: studentId,
         question_count: questionCount,
-        interview_type: interviewType as 'Mixed' | 'Technical' | 'HR' | 'Role-specific',
-        difficulty: difficulty as 'Easy' | 'Medium' | 'Hard'
+        interview_type:
+          interviewType as
+            | 'Mixed'
+            | 'Technical'
+            | 'HR'
+            | 'Role-specific',
+        difficulty:
+          difficulty as
+            | 'Easy'
+            | 'Medium'
+            | 'Hard'
       }) as InterviewResponse
 
       const result =
@@ -172,13 +180,27 @@ export default function Interview() {
       }) as { evaluation: Evaluation }
 
       setEvaluation(data.evaluation)
-      const studentData = localStorage.getItem('student')
+
+      const studentData =
+        localStorage.getItem('student')
+
       if (studentData) {
         try {
-          const student = JSON.parse(studentData)
-          const id = student.student_id ?? student.id
-          if (id) localStorage.setItem(`prepmate_interview_result_${id}`, JSON.stringify(data.evaluation))
-        } catch { /* ignore invalid local data */ }
+          const student =
+            JSON.parse(studentData)
+
+          const id =
+            student.student_id ?? student.id
+
+          if (id) {
+            localStorage.setItem(
+              `prepmate_interview_result_${id}`,
+              JSON.stringify(data.evaluation)
+            )
+          }
+        } catch {
+          /* ignore invalid local data */
+        }
       }
     } catch (err) {
       setError(
@@ -202,75 +224,57 @@ export default function Interview() {
         <div className="metric-grid">
 
           <Card>
-            <small>
-              Overall Score
-            </small>
+            <small>Overall Score</small>
 
             <div className="metric">
               {evaluation.overall_score}%
             </div>
 
             <Progress
-              value={
-                evaluation.overall_score
-              }
+              value={evaluation.overall_score}
             />
           </Card>
 
           <Card>
-            <small>
-              Technical
-            </small>
+            <small>Technical</small>
 
             <div className="metric">
               {evaluation.technical_score}%
             </div>
 
             <Progress
-              value={
-                evaluation.technical_score
-              }
+              value={evaluation.technical_score}
             />
           </Card>
 
           <Card>
-            <small>
-              Relevance
-            </small>
+            <small>Relevance</small>
 
             <div className="metric">
               {evaluation.relevance_score}%
             </div>
 
             <Progress
-              value={
-                evaluation.relevance_score
-              }
+              value={evaluation.relevance_score}
             />
           </Card>
 
           <Card>
-            <small>
-              Communication
-            </small>
+            <small>Communication</small>
 
             <div className="metric">
               {evaluation.communication_score}%
             </div>
 
             <Progress
-              value={
-                evaluation.communication_score
-              }
+              value={evaluation.communication_score}
             />
           </Card>
 
         </div>
 
         <Card>
-          <h2>
-            Interview Summary
-          </h2>
+          <h2>Interview Summary</h2>
 
           <p>
             Answered{' '}
@@ -287,15 +291,14 @@ export default function Interview() {
         </Card>
 
         <Card>
-          <h2>
-            Question-wise Feedback
-          </h2>
+          <h2>Question-wise Feedback</h2>
 
           <div className="stack">
 
             {evaluation.feedback.map(
               (item, index) => (
                 <div key={index}>
+
                   <b>
                     Q{index + 1}.{' '}
                     {item.question}
@@ -304,6 +307,7 @@ export default function Interview() {
                   <p>
                     {item.feedback}
                   </p>
+
                 </div>
               )
             )}
@@ -312,6 +316,7 @@ export default function Interview() {
         </Card>
 
         <div className="actions">
+
           <Button
             variant="secondary"
             onClick={() => {
@@ -325,12 +330,14 @@ export default function Interview() {
           >
             New AI Interview
           </Button>
+
         </div>
       </>
     )
   }
 
   if (started && interview) {
+
     const currentQuestion =
       interview.questions[currentIndex]
 
@@ -338,8 +345,28 @@ export default function Interview() {
       return null
     }
 
+    /*
+     * IMPORTANT:
+     * Progress is based ONLY on questions
+     * that actually contain an answer.
+     *
+     * Example for 10 questions:
+     *
+     * Q1 displayed, no answer  -> 0%
+     * Q1 answered              -> 10%
+     * Q2 displayed             -> 10%
+     * Q2 unanswered            -> 10%
+     * Q2 answered              -> 20%
+     */
+    const answeredCount =
+      interview.questions.filter(
+        (question) =>
+          answers[question.question]?.trim()
+            .length > 0
+      ).length
+
     const progress =
-      ((currentIndex + 1) /
+      (answeredCount /
         interview.questions.length) *
       100
 
@@ -357,6 +384,7 @@ export default function Interview() {
         <Card>
 
           <div className="section-title">
+
             <b>
               Question{' '}
               {currentIndex + 1} of{' '}
@@ -366,11 +394,10 @@ export default function Interview() {
             <span>
               {Math.round(progress)}%
             </span>
+
           </div>
 
-          <Progress
-            value={progress}
-          />
+          <Progress value={progress} />
 
           <h2 className="question">
             {currentQuestion.question}
@@ -423,6 +450,7 @@ export default function Interview() {
             </Button>
 
             {!isLast ? (
+
               <Button
                 onClick={() =>
                   setCurrentIndex(
@@ -432,7 +460,9 @@ export default function Interview() {
               >
                 Save & Next
               </Button>
+
             ) : (
+
               <Button
                 onClick={
                   evaluateInterview
@@ -443,6 +473,7 @@ export default function Interview() {
                   ? 'Evaluating...'
                   : 'Submit Interview'}
               </Button>
+
             )}
 
           </div>
@@ -474,6 +505,7 @@ export default function Interview() {
                 )
               }
             >
+
               <option value="Mixed">
                 Mixed
               </option>
@@ -489,7 +521,9 @@ export default function Interview() {
               <option value="Role-specific">
                 Role-specific
               </option>
+
             </select>
+
           </label>
 
           <label>
@@ -503,6 +537,7 @@ export default function Interview() {
                 )
               }
             >
+
               <option value="Easy">
                 Easy
               </option>
@@ -514,7 +549,9 @@ export default function Interview() {
               <option value="Hard">
                 Hard
               </option>
+
             </select>
+
           </label>
 
           <label>
@@ -528,6 +565,7 @@ export default function Interview() {
                 )
               }
             >
+
               <option value={3}>
                 3
               </option>
@@ -543,7 +581,9 @@ export default function Interview() {
               <option value={15}>
                 15
               </option>
+
             </select>
+
           </label>
 
         </div>

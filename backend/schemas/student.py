@@ -23,3 +23,31 @@ class StudentCreate(BaseModel):
         default=None,
         max_length=20
     )
+
+    # Extended profile information
+    phone: str | None = Field(
+        default=None,
+        max_length=30
+    )
+
+    location: str | None = Field(
+        default=None,
+        max_length=200
+    )
+
+    degree: str | None = Field(
+        default="B.Tech",
+        max_length=100
+    )
+
+    skills: list[str] = Field(
+        default_factory=list
+    )
+
+    softSkills: list[str] = Field(
+        default_factory=list
+    )
+
+    interests: list[str] = Field(
+        default_factory=list
+    )
