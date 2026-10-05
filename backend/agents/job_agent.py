@@ -505,15 +505,12 @@ def _estimate_experience_level(resume_analysis):
 
     # Look for explicit years of experience.
 
+    
+
     year_matches = re.findall(
-
-        r"(\d+(?:**\.**\d+)?)\s***\\+**?\s*(?:years?|yrs?)",
-
-        combined,
-
-    )
-
-
+    r"(\d+(?:\.\d+)?)\s*\+?\s*(?:years?|yrs?)",
+    combined,
+)
 
     years = []
 
